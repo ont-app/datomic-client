@@ -1,5 +1,5 @@
 (defproject ont-app/datomic-client "0.1.0-SNAPSHOT"
-  :description "FIXME"
+  :description "Extends IGraph protocol to Datomic"
   :url "https://github.com/ont-app/datomic-client"
   :license {:name "Eclipse Public License"
             :url "http://www.eclipse.org/legal/epl-v10.html"}
@@ -7,11 +7,13 @@
                  [org.clojure/clojurescript "1.10.520"]
                  [org.clojure/spec.alpha "0.2.176"]
                  ;; 3rd party libs
+                 [com.datomic/client-pro "0.9.41"]
                  [lein-doo "0.1.11"]
                  ;; Ont-app libs
                  [ont-app/graph-log "0.1.0-SNAPSHOT"]
                  [ont-app/igraph "0.1.4-SNAPSHOT"]
-                 [ont-app/igraph-vocabulary "0.1.0-SNAPSHOT"]
+                 [ont-app/igraph-vocabulary "0.1.0-SNAPSHOT"] 
+                 [ont-app/vocabulary "0.1.0-SNAPSHOT"] ;; ??
                  ]
   
   ;; :main ^:skip-aot ont-app.datomic-client.core
@@ -58,7 +60,7 @@
   :codox {:output-path "doc"}
 
   :profiles {:uberjar {:aot :all}
-             :dev {:dependencies [[binaryage/devtools "0.9.10"]
+             :dev {:dependencies [[binaryage/devtools "0.9.11"]
                                   ]
                    :source-paths ["src"] 
                    :clean-targets
