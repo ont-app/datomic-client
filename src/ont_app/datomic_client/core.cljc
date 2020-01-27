@@ -38,15 +38,15 @@ Where
 <db> is an instance of a Datascript database.
 "
     }
-    DatomicClient [conn db t]
+    DatomicClient [conn db]
   igraph/IGraph
-  (normal-form [this] (get-normal-form (d/as-of db t)))
-  (subjects [this] (get-subjects (d/as-of db t)))
-  (get-p-o [this s] (query-for-p-o (d/as-of db t) s))
-  (get-o [this s p] (query-for-o (d/as-of db t) s p))
-  (ask [this s p o] (ask-s-p-o (d/as-of db t) s p o))
+  (normal-form [this] (get-normal-form db))
+  (subjects [this] (get-subjects db))
+  (get-p-o [this s] (query-for-p-o db s))
+  (get-o [this s p] (query-for-o db s p))
+  (ask [this s p o] (ask-s-p-o db s p o))
   (mutability [this] ::igraph/mutable)
-  (query [this query-spec] (d/q query-spec (d/as-of db t)))
+  (query [this query-spec] (d/q query-spec db))
   
   #?(:clj clojure.lang.IFn
      :cljs cljs.core/IFn)
@@ -66,34 +66,45 @@ Where
   )
 
 (def igraph-schema
-  [{:db/ident :igraph/id
+  [{:db/ident :igraph/kwi
     :db/valueType :db.type/keyword
     :db/unique :db.unique/identity
-    :db/doc "Names the subject"
-    :db/cardinality :db.cardinality/one}
-   {:db/ident :igraph/top
-    :db/valueType :db.type/boolean
+    :db/doc "Uniquely names a graph element"
     :db/cardinality :db.cardinality/one
-    :db/doc (str "Indicates entities which are not otherwise elaborated."
-              "Use this if you encounter a Nothing found for entity id <x>"
-              "error.")
-    
     }
    ])
 
+(defn ensure-igraph-schema [conn]
+  "Side-effect: ensures that `igraph-schema` is installed in `conn`
+Returns: `conn`
+Where
+<igraph-schema> defines all properties referenced in datomic-client,
+  notably :igraph/kwi
+<conn> is a transactor, presumably initialized with other domain-specific 
+  schemas.
+"
+  (when (empty? (d/q '[:find ?e
+                       :where [?e :db/ident :igraph/kwi]]
+                     (d/db conn)))
+    (d/transact conn {:tx-data igraph-schema}))
+  conn)
+    
 
 (defn make-graph
-  "Returns an instance of DatascriptGraph.
+  "Returns an instance of DatascriptGraph for `conn` and maybe `db`
   Where
-  <schema> must contain Datascript schema declaration for every <p>.
-  See also <https://github.com/kristianmandrup/datascript-tutorial/blob/master/create_schema.md>
+  <conn> is a transactor, presumably initialized for domain-specific schemas
+  <db> (optional) is a db filter on `conn`, default is the db as-of the
+    current basis-t of <conn>
   "
   ([conn]
-   (->DatomicClient conn (d/db conn) (:t (d/db conn))) ;;
-   ))
+   (make-graph conn
+               (d/as-of (d/db conn) (:t (d/db conn)))))
+  ([conn db]
+   (->DatomicClient (ensure-igraph-schema conn) db)))
 
 ;; TODO: do we need this?
-(defn get-entity-id [db s]
+#_(defn get-entity-id [db s]
   "Returns <e> for <s> in <g>
 Where
 <e> is the entity ID (a positive integer) in (:db <g>)
@@ -108,17 +119,29 @@ Where
    :log/get-entity-id
    [:log/subject s]
    (igraph/unique
-    (d/q '[:find ?e :where [?e :igraph/id s]] db))))
+    (d/q '[:find ?e :where [?e :igraph/kwi s]] db))))
 
 
 (defn get-subjects [db]
+  "Returns (<s>, ...) for <db>, a lazy seq
+Where
+<s> is a keyword identifier
+<e> :igraph/kwi <s>, in <db>
+<e> is an entity-id
+<db> is a datomic db
+"
   (map first
-       (d/q '[:find ?s :where [_ :igraph/id ?s]] db)))
+       (d/q '[:find ?s
+              :where [_ :igraph/kwi ?s]] db)))
 
 
 (defn query-for-p-o [db s]
+  "Returns <desc> for <s> in <db>
+Where
+<desc> := {<p> #{<o>, ...}, ...}
+"
   (letfn [(collect-desc [desc [p o]]
-            (if (= p :igraph/id)
+            (if (= p :igraph/kwi)
               desc
               (let [os (or (desc p) #{})
                     ]
@@ -128,13 +151,16 @@ Where
             (d/q '[:find ?p ?o
                    :in $ ?s
                    :where
-                   [?e :igraph/id ?s]
+                   [?e :igraph/kwi ?s]
                    [?e ?_p ?o] 
                    [?_p :db/ident ?p]
                    ]
                  db s))))
 
 (defn get-normal-form [db]
+  "Returns {<s> {<p> #{<o>, ...}, ...}, ...} for all <s> in <db>
+Where
+<e> :igraph/kwi <s>"
   (letfn [(collect-descriptions [m s]
             (assoc m s (query-for-p-o db s)))
           ]
@@ -143,21 +169,43 @@ Where
             (get-subjects db))))
 
 (defn query-for-o [db s p]
+  "Returns #{<o>, ...} for <s> and <p> in <db>
+Where
+<o> is a value for <s> and <p> in <db>
+<s> is a subject in <db>
+<p> is a predicate with schema definition in <db>
+<db> is a datomic db
+"
   (reduce conj
           #{}
           (map first
                (d/q '[:find ?o
                       :in $ ?s ?p
                       :where
-                      [?e :igraph/id ?s]
+                      [?e :igraph/kwi ?s]
                       [?e ?_p ?o] 
                       [?_p :db/ident ?p]]
                     db s p))))
  
 
 (defn ask-s-p-o [db s p o]
-  ((query-for-o db s p) o))
+  "Returns true iff s-p-o is a triple in <db>"
+  (not (empty?
+        (d/q '[:find ?e
+               :in $ ?s ?p ?o
+               :where
+               [?e :igraph/kwi ?s]
+               [?e ?p ?o]
+               ]
+             db
+             s p o))))
 
+(defn get-schema [db]
+  "Returns a native graph describing the schema of <db>
+"
+  (throw (ex-info "Not yet implemented"
+                  {:type :not-yet-implemented
+                   :db db})))
 
 (defn query-schema [db ident]
   (d/q '[:find ?ident ?valueType ?cardinality
@@ -215,7 +263,7 @@ Where
             ;; Maps each subject to an assertion map 
             (let [desc (or (unique (annotations :tx-data s))
                            {
-                            :igraph/id s
+                            :igraph/kwi s
                             })
                   ]
               (assert-unique annotations
@@ -244,7 +292,8 @@ Where
           (tx-data [annotations]
             (reduce conj
                     []
-                    ;; (annotations :tx-data) := {<s> #{<tx-data-map>}}
+                    ;; (annotations :tx-data) := {<s> #{<s-tx-data>}}
+                    ;; <s-tx-data> := {<p> <o>, ...}
                     (map unique (vals (annotations :tx-data)))))
           ]
     

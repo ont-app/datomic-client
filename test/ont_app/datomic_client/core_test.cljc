@@ -27,8 +27,8 @@
 (def client (d/client cfg))
 (def conn (d/connect client {:db-name "hello"}))
 
-(def igraph-schema
-  [{:db/ident :igraph/id
+#_(def igraph-schema
+  [{:db/ident :igraph/kwi
     :db/valueType :db.type/keyword
     :db/unique :db.unique/identity
     :db/doc "Names the subject"
@@ -59,10 +59,11 @@
                     :db/doc "The year the movie was released in theaters"}])
 
 
+(defn add-schema [conn]
+  (d/transact conn {:tx-data (reduce conj dg/igraph-schema movie-schema)})
+  conn)
 
-(defn add-schema []
-  (d/transact conn {:tx-data (reduce conj igraph-schema movie-schema)}))
-
+(def initial-graph (make-graph (add-schema conn)))
 
 (defmethod mint-kwi :movie/Movie
   [head-kwi & args]
@@ -82,34 +83,25 @@
         ]
     kwi))
 
-(def first-movies [{:movie/title "The Goonies"
-                    :igraph/id (igv/mint-kwi :movie/Movie
-                                       :movie/title "The Goonies"
-                                       :movie/release-year 1985
-                                       )
-                    :movie/genre "action/adventure"
-                    :movie/release-year 1985
-                    }
-                   {
-                    :igraph/id (igv/mint-kwi :movie/Movie
-                                       :movie/title "Commando"
-                                       :movie/release-year 1985
-                                       )
-                    :movie/title "Commando"
-                    :movie/genre "action/adventure"
-                    :movie/release-year 1985
-                    }
-                   {:igraph/id (igv/mint-kwi :movie/Movie
-                                             :movie/title "Repo Man"
-                                             :movie/release-year 1984
-                                             )
-                    :movie/title "Repo Man"
-                    :movie/genre "punk dystopia"
-                    :movie/release-year 1984
-                    }])
 
 
-(defn add-data [data]
+(defn add-movie-spec [vacc [title date genre]]
+  (conj vacc
+        [(mint-kwi :movie/Movie
+                   :movie/title title
+                   :movie/date date)
+         :movie/title title
+         :movie/release-date date
+         :movie/genre genre]))
+
+(def first-movies (reduce add-movie-spec
+                          []
+                          [["The Goonies" 1985 "action/adventure"]
+                           ["Commando" 1985 "action/adventure"]
+                           ["Repo Man" 1985 "punk dystopia"]
+                           ]))
+
+#_(defn add-data [data]
   (d/transact conn {:tx-data data}))
 
 
