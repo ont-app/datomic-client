@@ -45,7 +45,7 @@ Where
   (get-p-o [this s] (query-for-p-o db s))
   (get-o [this s p] (query-for-o db s p))
   (ask [this s p o] (ask-s-p-o db s p o))
-  (mutability [this] ::igraph/mutable)
+  (mutability [this] ::igraph/accumulate-only)
   (query [this query-spec] (d/q query-spec db))
   
   #?(:clj clojure.lang.IFn
@@ -55,9 +55,9 @@ Where
   (invoke [g s p] (igraph/match-or-traverse g s p))
   (invoke [g s p o] (igraph/match-or-traverse g s p o))
 
-  igraph/IGraphMutable
-  (add! [this to-add] (igraph/add-to-graph this to-add))
-  (subtract! [this to-subtract] (igraph/remove-from-graph this to-subtract))
+  igraph/IGraphAccumulateOnly
+  (claim [this to-add] (igraph/add-to-graph this to-add))
+  (retract [this to-subtract] (igraph/remove-from-graph this to-subtract))
 
   igraph/IGraphSet
   (union [g1 g2] (graph-union g1 g2))
@@ -73,6 +73,29 @@ Where
     :db/cardinality :db.cardinality/one
     }
    ])
+
+(def igraph-rules
+  '[
+    [(subject ?e ?s)
+     ;; pairs ?e with any ident or unique identifier as ?s
+     (or-join [?e ?s]
+              [?e :db/ident ?s]
+              (and 
+               [?p :db/unique :db.unique/identity]
+               [?e ?p ?s]))]
+    [(resolve-refs ?e ?p ?o ?v)
+     ;; infers ?v from ?o depending on whether ?p maps to a ref
+      (or-join [?e ?p ?o ?v]
+               (and [?p :db/valueType :db.type/ref]
+                    [?e ?p ?o]
+                    (subject ?o ?v))
+               (and (not [?p :db/valueType :db.type/ref])
+                    [?e ?p ?o]
+                    [(identity ?o) ?v]
+                    )
+               
+               )]
+     ]) ;; end rules
 
 (defn ensure-igraph-schema [conn]
   "Side-effect: ensures that `igraph-schema` is installed in `conn`
@@ -103,6 +126,326 @@ Where
   ([conn db]
    (->DatomicClient (ensure-igraph-schema conn) db)))
 
+  
+(defn get-subjects [db]
+  "Returns (<s>, ...) for <db>, a lazy seq
+Where
+<s> is a keyword identifier
+<e> :igraph/kwi <s>, in <db>
+<e> is an entity-id
+<db> is a datomic db
+"
+  (map first
+       (d/q '[:find ?s
+              :in $ %
+              :where
+              (subject ?e ?s)]
+            db igraph-rules)))
+
+(defn query-for-p-o [db s]
+  "Returns <desc> for <s> in <db>
+Where
+<desc> := {<p> #{<o>, ...}, ...}
+"
+  (letfn [(collect-desc [desc [p o]]
+            (if (= p :igraph/kwi)
+              desc
+              (let [os (or (desc p) #{})
+                    ]
+                (assoc desc p (conj os o)))))
+          ]
+    (reduce collect-desc {}
+            (d/q '[:find ?p ?o
+                   :in $ % ?s
+                   :where
+                   (subject ?e ?s)
+                   [?e ?_p ?_o]
+                   [?_p :db/ident ?p]
+                   (resolve-refs ?e ?p ?_o ?o)
+                   ]
+                 db igraph-rules s))))
+
+(defn get-normal-form [db]
+  "Returns {<s> {<p> #{<o>, ...}, ...}, ...} for all <s> in <db>
+Where
+<e> :igraph/kwi <s>"
+  (letfn [(collect-descriptions [m s]
+            (assoc m s (query-for-p-o db s)))
+          ]
+    (reduce collect-descriptions
+            {}
+            (get-subjects db))))
+
+
+
+
+(defn query-for-o [db s p]
+  "Returns #{<o>, ...} for <s> and <p> in <db>
+Where
+<o> is a value for <s> and <p> in <db>
+<s> is a subject in <db>
+<p> is a predicate with schema definition in <db>
+<db> is a datomic db
+"
+  (reduce conj
+          #{}
+          (map first
+               (d/q '[:find ?o
+                      :in $ % ?s ?p
+                      :where
+                      (subject ?e ?s)
+                      [?e ?_p ?_o] 
+                      [?_p :db/ident ?p]
+                      (resolve-refs ?e ?p ?_o ?o)
+                      ]
+                    db igraph-rules s p))))
+
+(defn ask-s-p-o [db s p o]
+  "Returns true iff s-p-o is a triple in <db>"
+  (not (empty?
+        (d/q '[:find ?e
+               :in $ % ?s ?p ?o
+               :where
+               (subject ?e ?s)
+               [?e ?p ?_o]
+               (resolve-refs ?e ?p ?_o ?o)
+               ]
+             db igraph-rules
+             s p o))))
+
+
+
+
+(def value-to-value-type-atom
+  "From https://docs.datomic.com/cloud/schema/schema-reference.html#db-valuetype"
+  (atom
+   {
+    java.math.BigDecimal :db.type/bigdec
+    java.math.BigInteger :db.type/bigint
+    java.lang.Boolean :db.type/boolean
+    java.lang.Double :db.type/double
+    java.lang.Float :db.type/float
+    java.util.Date :db.type/instant
+    clojure.lang.Keyword :db.type/ref ;; note
+    java.lang.Long :db.type/long
+    java.lang.String :db.type/string
+    clojure.lang.Symbol :db.type/symbol
+    java.util.UUID :db.type/uuid
+    java.net.URI :db.type/URI
+    ;; clojure container classes not listed here.
+    }))
+
+(defn map-value-to-value-type [value]
+  (or
+   (@value-to-value-type-atom (type value))
+   (cond
+     (vector? value) :db.type/tuple)))
+        
+
+(defmethod igraph/add-to-graph [DatomicClient :normal-form]
+  [g triples]
+  (when (not= (:t (:db g)) (:t (d/db (:conn g))))
+    (glog/warn! :log/DiscontinuousDiscourse
+                :glog/message "Adding to conn with t-basis {{:log/conn-t}} from graph with t-basis {{:log/g-t}}."
+                :log/g-t (:t (:db g))
+                :log/conn-t (:t (d/db (:conn g)))))
+
+  (let [triples-graph (graph/make-graph :contents triples)
+        db-ids (atom {})
+        ]
+  (letfn [
+          (maybe-new-p [s p annotations o]
+            ;; Declares new properties and the types of their objects
+            ;; It is expected that all objects are of the same type
+            (if (empty? (g p))
+              (add annotations [[:NewProperty :has-instance p]
+                                [p
+                                 :has-value-type
+                                 (map-value-to-value-type o)]])
+              annotations))
+          
+          (maybe-new-ref [p annotations o]
+            ;; Declares a new db/id for new references
+            (if (and (or (annotations p :has-value-type :db/ref)
+                         (g p :db/valueType :db/ref))
+                     (empty? (annotations :tx-data o))
+                     )
+              (let [db-id (subs (str o) 1)]
+                (-> annotations
+                    (assert-unique :tx-data o {:db/id db-id
+                                               :igraph/kwi o})
+                    ;; annotate the db/id for future reference
+                    (assert-unique o :db/id db-id)))
+                
+              annotations))
+          
+          (collect-assertion [s p annotations o]
+            ;; Maps each subject to an assertion map 
+            (let [desc (or (unique (annotations :tx-data s))
+                           {
+                            :igraph/kwi s
+                            })
+                  ]
+              (assert-unique annotations
+                             :tx-data s (assoc desc p o))))
+
+
+
+          (pre-process [annotations s p o]
+            ;; Returns graph with vocabulary :NewProperty :has-instance :hasType
+            ;;  :tx-data
+            ;; Where
+            ;; :NewProperty :hasInstance <p>
+            ;; :tx-data <subject> <assertion map>
+            ;; <elt> :db/id <db-id>
+            ;; <p> :has-value-type <value type>
+            ;; <value type> is a datomic value type
+            ;; <assertion map> := {<datalog-property> <value>, ...}
+            ;; value may be <db-id> or <o> as appropriate
+            (as-> annotations a
+                ;;(maybe-declare-kwi a s)
+              (maybe-new-p s p a o)
+              (maybe-new-ref p a o)
+              (collect-assertion s
+                                 p
+                                 a
+                                 (or (unique (a o :db/id))
+                                     o))))
+          
+          (collect-schema-tx-data [annotations vacc p]
+            (conj
+             vacc
+             {:db/ident p
+              :db/valueType (unique (annotations p :has-value-type))
+              :db/cardinality :db.cardinality/many
+              :db/doc (str "Declared automatically while importing")
+              }))
+          (tx-data [annotations]
+            (glog/value-warn!
+             :log/tx-data
+             [:log/annotations (igraph/normal-form annotations)]
+             (reduce conj
+                     []
+                     ;; (annotations :tx-data) := {<s> #{<s-tx-data>}}
+                     ;; <s-tx-data> := {<p> <o>, ...}
+                     (map unique (vals (annotations :tx-data))))))
+          ]
+    
+    (let [annotations 
+          (reduce-spo pre-process
+                      (graph/make-graph)
+                      (graph/make-graph :contents triples))
+          ]
+      (when (not (empty? (annotations :NewProperty)))
+        (d/transact (:conn g)
+                    {:tx-data (reduce
+                               (partial collect-schema-tx-data annotations)
+                               []
+                               (annotations :NewProperty :has-instance))}))
+      (d/transact (:conn g)
+                  {:tx-data  (tx-data annotations)})
+      
+      (make-graph (:conn g))))))
+      
+
+;; Declared in igraph.core
+(defmethod igraph/add-to-graph [DatomicClient :vector-of-vectors]
+  [g triples]
+  (if (empty? triples)
+    g
+    (igraph/add-to-graph
+     g
+     (igraph/normal-form
+      (igraph/add (graph/make-graph)
+                  (with-meta triples
+                    {:triples-format :vector-of-vectors}))))))
+
+;; Declared in igraph.core
+(defmethod igraph/add-to-graph [DatomicClient :vector] [g triple]
+  (if (empty? triple)
+    g
+    (igraph/add-to-graph
+     g
+     (igraph/normal-form
+      (igraph/add (graph/make-graph)
+                  (with-meta [triple]
+                    {:triples-format :vector-of-vectors}))))))
+
+(defn- shared-keys [m1 m2]
+  "Returns {<shared key>...} for <m1> and <m2>
+Where
+<shared key> is a key in both maps <m1> and <m2>
+"
+  (set/intersection (set (keys m1))
+                    (set (keys m2))))
+
+
+(defmethod igraph/remove-from-graph [DatomicClient :vector-of-vectors]
+  [g to-remove]
+  (when (not= (:t (:db g)) (:t (d/db (:conn g))))
+    (glog/warn! :log/DiscontinuousDiscourse
+                :glog/message "Retracting from conn with t-basis {{:log/conn-t}} from graph with t-basis {{:log/g-t}}."
+                :log/g-t (:t (:db g))
+                :log/conn-t (:t (d/db (:conn g)))))
+  g)
+
+
+
+
+(defmethod igraph/remove-from-graph [DatomicClient :vector]
+  [g to-remove]
+  g)
+
+
+
+(defmethod igraph/remove-from-graph [DatomicClient :underspecified-triple]
+  [g to-remove]
+  g)
+
+
+
+(defmethod igraph/remove-from-graph [DatomicClient :normal-form]
+  [g to-remove]
+  g)
+
+
+
+;; SET OPERATIONS
+(defn graph-union [g1 g2]
+  "Returns union of <g1> and <g2> using same schema as <g1>
+This uses igraph.graph/Graph as scratch, and probably won't scale.
+TODO:Redo when you have data to develop for scale.
+"
+  #_(igraph/add (make-graph (merge (:schema (:db g1))
+                                 (:schema (:db g2))))
+       (igraph/normal-form (igraph/union
+                            (igraph/add (graph/make-graph) (g1))
+                            (igraph/add (graph/make-graph) (g2))))))
+
+(defn graph-difference [g1 g2]
+  "This uses igraph.graph/Graph as scratch, and probably won't scale.
+TODO:Redo when you have data to develop for scale.
+"
+  #_(igraph/add (make-graph (:schema (:db g1)))
+              (igraph/normal-form
+               (igraph/difference
+                (igraph/add (graph/make-graph) (g1))
+                (igraph/add (graph/make-graph) (g2))))))
+
+(defn graph-intersection [g1 g2]
+  "This uses igraph.graph/Graph as scratch, and probably won't scale.
+TODO:Redo when you have data to develop for scale.
+"
+  #_(igraph/add (make-graph (:schema (:db g1)))
+              (igraph/normal-form
+               (igraph/intersection
+                (igraph/add (graph/make-graph) (g1))
+                (igraph/add (graph/make-graph) (g2))))))
+
+
+(defn dummy-fn []
+  "The eagle has landed")
+    
 ;; TODO: do we need this?
 #_(defn get-entity-id [db s]
   "Returns <e> for <s> in <g>
@@ -122,7 +465,7 @@ Where
     (d/q '[:find ?e :where [?e :igraph/kwi s]] db))))
 
 
-(defn get-subjects [db]
+#_(defn old_get-subjects [db]
   "Returns (<s>, ...) for <db>, a lazy seq
 Where
 <s> is a keyword identifier
@@ -134,8 +477,7 @@ Where
        (d/q '[:find ?s
               :where [_ :igraph/kwi ?s]] db)))
 
-
-(defn query-for-p-o [db s]
+#_(defn old_query-for-p-o [db s]
   "Returns <desc> for <s> in <db>
 Where
 <desc> := {<p> #{<o>, ...}, ...}
@@ -157,18 +499,7 @@ Where
                    ]
                  db s))))
 
-(defn get-normal-form [db]
-  "Returns {<s> {<p> #{<o>, ...}, ...}, ...} for all <s> in <db>
-Where
-<e> :igraph/kwi <s>"
-  (letfn [(collect-descriptions [m s]
-            (assoc m s (query-for-p-o db s)))
-          ]
-    (reduce collect-descriptions
-            {}
-            (get-subjects db))))
-
-(defn query-for-o [db s p]
+#_(defn old-query-for-o [db s p]
   "Returns #{<o>, ...} for <s> and <p> in <db>
 Where
 <o> is a value for <s> and <p> in <db>
@@ -183,141 +514,9 @@ Where
                       :in $ ?s ?p
                       :where
                       [?e :igraph/kwi ?s]
-                      [?e ?_p ?o] 
+                      [?e ?_p ?o]
                       [?_p :db/ident ?p]]
                     db s p))))
- 
-
-(defn ask-s-p-o [db s p o]
-  "Returns true iff s-p-o is a triple in <db>"
-  (not (empty?
-        (d/q '[:find ?e
-               :in $ ?s ?p ?o
-               :where
-               [?e :igraph/kwi ?s]
-               [?e ?p ?o]
-               ]
-             db
-             s p o))))
-
-(defn get-schema [db]
-  "Returns a native graph describing the schema of <db>
-"
-  (throw (ex-info "Not yet implemented"
-                  {:type :not-yet-implemented
-                   :db db})))
-
-(defn query-schema [db ident]
-  (d/q '[:find ?ident ?valueType ?cardinality
-         :in $ ?ident
-         :where
-         [?e :db/ident ?ident]
-         [?e :db/valueType ?_valueType]
-         [?e :db/cardinality ?_cardinality]
-         [?_valueType :db/ident ?valueType]
-         [?_cardinality :db/ident ?cardinality]
-         ]
-       db ident))
-
-
-(def value-to-value-type-atom
-  "From https://docs.datomic.com/cloud/schema/schema-reference.html#db-valuetype"
-  (atom
-   {
-    java.math.BigDecimal :db.type/bigdec
-    java.math.BigInteger :db.type/bigint
-    java.lang.Boolean :db.type/boolean
-    java.lang.Double :db.type/double
-    java.lang.Float :db.type/float
-    java.util.Date :db.type/instant
-    clojure.lang.Keyword :db.type/keyword
-    java.lang.Long :db.type/long
-    java.lang.String :db.type/string
-    clojure.lang.Symbol :db.type/symbol
-    java.util.UUID :db.type/uuid
-    java.net.URI :db.type/URI
-    ;; clojure container classes not listed here.
-    }))
-
-(defn map-value-to-value-type [value]
-  (or
-   (@value-to-value-type-atom (type value))
-   (cond
-     (vector? value) :db.type/tuple)))
-        
-
-(defmethod igraph/add-to-graph [DatomicClient :normal-form]
-  [g triples]
-  (letfn [
-          (maybe-new-p [s p annotations o]
-            ;; Declares new properties and the types of their objects
-            ;; It is expected that all objects are of the same type
-            (if (empty? (query-schema (:db g)
-                                      p))
-              (add annotations [[:NewProperty :has-instance p]
-                                [p
-                                 :has-value-type
-                                 (map-value-to-value-type o)]])
-              annotations))
-          (collect-assertion [s p annotations o]
-            ;; Maps each subject to an assertion map 
-            (let [desc (or (unique (annotations :tx-data s))
-                           {
-                            :igraph/kwi s
-                            })
-                  ]
-              (assert-unique annotations
-                             :tx-data s (assoc desc p o))))
-          (pre-process [annotations s p o]
-            ;; Returns map with vocabulary :NewProperty :has-instance :hasType
-            ;;  :tx-data
-            ;; Where
-            ;; :NewProperty :hasInstance <p>
-            ;; :tx-data <subject> <asserion map>
-            ;; <p> :has-value-type <value type>
-            ;; <value ype> is a datomic value type
-            ;; <assertion map> := {<datalog-property> <value>, ...}
-            (-> annotations
-                ((partial maybe-new-p s p) o)
-                ((partial collect-assertion s p) o)))
-          
-          (collect-schema-tx-data [annotations vacc p]
-            (conj
-             vacc
-             {:db/ident p
-              :db/valueType (unique (annotations p :has-value-type))
-              :db/cardinality :db.cardinality/many
-              :db/doc (str "Declared automatically while importing")
-              }))
-          (tx-data [annotations]
-            (reduce conj
-                    []
-                    ;; (annotations :tx-data) := {<s> #{<s-tx-data>}}
-                    ;; <s-tx-data> := {<p> <o>, ...}
-                    (map unique (vals (annotations :tx-data)))))
-          ]
-    
-    (let [annotations 
-          (reduce-spo pre-process
-                      (graph/make-graph)
-                      (graph/make-graph :contents triples))
-          ]
-      (when (not (empty? (annotations :NewProperty)))
-        (d/transact (:conn g)
-                    {:tx-data (reduce
-                               (partial collect-schema-tx-data annotations)
-                               []
-                               (annotations :NewProperty :has-instance))}))
-      (d/transact (:conn g)
-                  {:tx-data  (tx-data annotations)})
-      
-      (make-graph (:conn g)))))
-      
-
-          
-                   
-                     
-
 #_(defmethod igraph/add-to-graph [DatomicClient :normal-form] [g triples]
   (glog/debug! :log/starting-add-to-graph
                :log/graph g
@@ -466,43 +665,6 @@ Where
                                        []
                                        triples))))))))
 
-
-;; Declared in igraph.core
-(defmethod igraph/add-to-graph [DatomicClient :vector-of-vectors]
-  [g triples]
-  (if (empty? triples)
-    g
-    (igraph/add-to-graph
-     g
-     (igraph/normal-form
-      (igraph/add (graph/make-graph)
-                  (with-meta triples
-                    {:triples-format :vector-of-vectors}))))))
-
-;; Declared in igraph.core
-(defmethod igraph/add-to-graph [DatomicClient :vector] [g triple]
-  (if (empty? triple)
-    g
-    (igraph/add-to-graph
-     g
-     (igraph/normal-form
-      (igraph/add (graph/make-graph)
-                  (with-meta [triple]
-                    {:triples-format :vector-of-vectors}))))))
-
-(defn- shared-keys [m1 m2]
-  "Returns {<shared key>...} for <m1> and <m2>
-Where
-<shared key> is a key in both maps <m1> and <m2>
-"
-  (set/intersection (set (keys m1))
-                    (set (keys m2))))
-
-
-(defmethod igraph/remove-from-graph [DatomicClient :vector-of-vectors]
-  [g to-remove]
-  g)
-
 #_(defmethod igraph/remove-from-graph [DatomicClient :vector-of-vectors]
   [g to-remove]
   (if (empty? to-remove)
@@ -534,11 +696,6 @@ Where
                       []
                       to-remove))))))
 
-
-(defmethod igraph/remove-from-graph [DatomicClient :vector]
-  [g to-remove]
-  g)
-
 #_(defmethod igraph/remove-from-graph [DatomicClient :vector]
   [g to-remove]
   (if (empty? to-remove)
@@ -546,11 +703,6 @@ Where
     (igraph/remove-from-graph g (with-meta
                                   [to-remove]
                                   {:triples-format :vector-of-vectors}))))
-
-(defmethod igraph/remove-from-graph [DatomicClient :underspecified-triple]
-  [g to-remove]
-  g)
-
 #_(defmethod igraph/remove-from-graph [DatomicClient :underspecified-triple]
   [g to-remove]
   (if (empty? to-remove)
@@ -558,10 +710,6 @@ Where
     (igraph/remove-from-graph g (with-meta
                                   [to-remove]
                                   {:triples-format :vector-of-vectors}))))
-
-(defmethod igraph/remove-from-graph [DatomicClient :normal-form]
-  [g to-remove]
-  g)
 
 #_(defmethod igraph/remove-from-graph [DatomicClient :normal-form]
   [g to-remove]
@@ -590,40 +738,14 @@ Where
        (with-meta
          (graph/vector-of-triples (igraph/add (graph/make-graph) to-remove))
          {:triples-format :vector-of-vectors})))))
-
-;; SET OPERATIONS
-(defn graph-union [g1 g2]
-  "Returns union of <g1> and <g2> using same schema as <g1>
-This uses igraph.graph/Graph as scratch, and probably won't scale.
-TODO:Redo when you have data to develop for scale.
-"
-  #_(igraph/add (make-graph (merge (:schema (:db g1))
-                                 (:schema (:db g2))))
-       (igraph/normal-form (igraph/union
-                            (igraph/add (graph/make-graph) (g1))
-                            (igraph/add (graph/make-graph) (g2))))))
-
-(defn graph-difference [g1 g2]
-  "This uses igraph.graph/Graph as scratch, and probably won't scale.
-TODO:Redo when you have data to develop for scale.
-"
-  #_(igraph/add (make-graph (:schema (:db g1)))
-              (igraph/normal-form
-               (igraph/difference
-                (igraph/add (graph/make-graph) (g1))
-                (igraph/add (graph/make-graph) (g2))))))
-
-(defn graph-intersection [g1 g2]
-  "This uses igraph.graph/Graph as scratch, and probably won't scale.
-TODO:Redo when you have data to develop for scale.
-"
-  #_(igraph/add (make-graph (:schema (:db g1)))
-              (igraph/normal-form
-               (igraph/intersection
-                (igraph/add (graph/make-graph) (g1))
-                (igraph/add (graph/make-graph) (g2))))))
-
-
-(defn dummy-fn []
-  "The eagle has landed")
-    
+#_(defn query-schema [db ident]
+  (d/q '[:find ?ident ?valueType ?cardinality
+         :in $ ?ident
+         :where
+         [?e :db/ident ?ident]
+         [?e :db/valueType ?_valueType]
+         [?e :db/cardinality ?_cardinality]
+         [?_valueType :db/ident ?valueType]
+         [?_cardinality :db/ident ?cardinality]
+         ]
+       db ident))

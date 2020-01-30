@@ -5,7 +5,7 @@
    [clojure.string :as str]
    ;;
    [datomic.client.api :as d]
-   [ont-app.datomic-client.core :as dg :refer [make-graph]]
+   [ont-app.datomic-client.core :as dg :refer :all]
    [ont-app.graph-log.core :as glog]
    [ont-app.igraph.core :as igraph :refer [add]]
    [ont-app.igraph-vocabulary.core :as igv :refer [mint-kwi]]
@@ -117,3 +117,7 @@
 (deftest dummy-test
   (testing "fixme"
     (is (= 1 2))))
+
+(comment
+  (igraph/claim initial-graph [::a ::b ::c])
+  )
