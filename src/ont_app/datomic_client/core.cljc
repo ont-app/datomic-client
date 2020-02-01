@@ -246,11 +246,11 @@ Where
   [g triples]
   (when (not= (:t (:db g)) (:t (d/db (:conn g))))
     (glog/warn! :log/DiscontinuousDiscourse
-                :glog/message "Adding to conn with t-basis {{:log/conn-t}} from graph with t-basis {{:log/g-t}}."
+                :glog/message "Adding to conn with t-basis {{log/conn-t}} from graph with t-basis {{log/g-t}}."
                 :log/g-t (:t (:db g))
                 :log/conn-t (:t (d/db (:conn g)))))
 
-  (let [triples-graph (graph/make-graph :contents triples)
+  (let [;; triples-graph (graph/make-graph :contents triples)
         db-ids (atom {})
         ]
   (letfn [
@@ -266,7 +266,11 @@ Where
           
           (maybe-new-ref [p annotations o]
             ;; Declares a new db/id for new references
-            (if (and (or (annotations p :has-value-type :db/ref)
+            (glog/warn! :log/starting-maybe-new-ref
+                        :p p
+                        :annotations annotations
+                        :value-type (annotations p :has-value-type))
+            (if (and (or (annotations p :has-value-type :db.type/ref)
                          (g p :db/valueType :db/ref))
                      (empty? (annotations :tx-data o))
                      )
@@ -292,16 +296,18 @@ Where
 
 
           (pre-process [annotations s p o]
-            ;; Returns graph with vocabulary :NewProperty :has-instance :hasType
-            ;;  :tx-data
+            ;; Returns graph with vocabulary :NewProperty :has-instance 
+            ;;  :has-value-type :tx-data
             ;; Where
             ;; :NewProperty :hasInstance <p>
             ;; :tx-data <subject> <assertion map>
-            ;; <elt> :db/id <db-id>
             ;; <p> :has-value-type <value type>
+            ;; <o> :db/id <db-id>
             ;; <value type> is a datomic value type
             ;; <assertion map> := {<datalog-property> <value>, ...}
-            ;; value may be <db-id> or <o> as appropriate
+            ;;   including a possible :db/id for new <o> refs
+            ;;   and :igraph/kwi declaration for <s>
+            ;; <value> may be <db-id> or <o> as appropriate
             (as-> annotations a
                 ;;(maybe-declare-kwi a s)
               (maybe-new-p s p a o)
@@ -321,8 +327,8 @@ Where
               :db/doc (str "Declared automatically while importing")
               }))
           (tx-data [annotations]
-            (glog/value-warn!
-             :log/tx-data
+            (glog/value-debug!
+             :log/tx-data-in-add-to-graph
              [:log/annotations (igraph/normal-form annotations)]
              (reduce conj
                      []
@@ -384,10 +390,16 @@ Where
   [g to-remove]
   (when (not= (:t (:db g)) (:t (d/db (:conn g))))
     (glog/warn! :log/DiscontinuousDiscourse
-                :glog/message "Retracting from conn with t-basis {{:log/conn-t}} from graph with t-basis {{:log/g-t}}."
+                :glog/message "Retracting from conn with t-basis {{log/conn-t}} from graph with t-basis {{log/g-t}}."
                 :log/g-t (:t (:db g))
                 :log/conn-t (:t (d/db (:conn g)))))
-  g)
+  (letfn [(retraction [v]
+            (reduce conj [:db/retract] v))
+          ]
+    (map retraction to-remove))
+    #_(d/transact (:conn g)
+                (into [] (map retraction to-remove)))
+    #_g)
 
 
 
