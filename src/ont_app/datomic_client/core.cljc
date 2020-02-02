@@ -217,16 +217,20 @@ Where
                     ]
                 (assoc desc p (conj os o)))))
           ]
-    (reduce collect-desc {}
-            (d/q '[:find ?p ?o
-                   :in $ % ?s
-                   :where
-                   (subject ?e ?s)
-                   [?e ?_p ?_o]
-                   [?_p :db/ident ?p]
-                   (resolve-refs ?e ?p ?_o ?o)
-                   ]
-                 db igraph-rules s))))
+    (let [desc
+          (reduce collect-desc {}
+                  (d/q '[:find ?p ?o
+                         :in $ % ?s
+                         :where
+                         (subject ?e ?s)
+                         [?e ?_p ?_o]
+                         [?_p :db/ident ?p]
+                         (resolve-refs ?e ?p ?_o ?o)
+                         ]
+                       db igraph-rules s))
+          ]
+      (if (not (empty? desc))
+        desc))))
 
 (defn get-normal-form [db]
   "Returns {<s> {<p> #{<o>, ...}, ...}, ...} for all <s> in <db>
@@ -247,32 +251,44 @@ Where
 <p> is a predicate with schema definition in <db>
 <db> is a datomic db
 "
-  (reduce conj
-          #{}
-          (map first
-               (d/q '[:find ?o
-                      :in $ % ?s ?p
-                      :where
-                      (subject ?e ?s)
-                      ;;[?_p :db/ident ?p]
-                      ;;[?e ?_p ?_o]
-                      [?e ?p ?_o] 
-                      (resolve-refs ?e ?p ?_o ?o)
-                      ]
-                    db igraph-rules s p))))
+  (try 
+    (reduce conj
+            #{}
+            (map first
+                 (d/q '[:find ?o
+                        :in $ % ?s ?p
+                        :where
+                        (subject ?e ?s)
+                        ;;[?_p :db/ident ?p]
+                        ;;[?e ?_p ?_o]
+                        [?e ?p ?_o] 
+                        (resolve-refs ?e ?p ?_o ?o)
+                        ]
+                      db igraph-rules s p)))
+    (catch Throwable e
+      (let [ed (ex-data e)]
+        (if (= (:db/error ed) :db.error/not-an-entity)
+          nil
+          (throw e))))))
 
 (defn ask-s-p-o [db s p o]
   "Returns true iff s-p-o is a triple in <db>"
   (not (empty?
-        (d/q '[:find ?e
-               :in $ % ?s ?p ?o
-               :where
-               (subject ?e ?s)
-               [?e ?p ?_o]
-               (resolve-refs ?e ?p ?_o ?o)
-               ]
-             db igraph-rules
-             s p o))))
+        (try 
+          (d/q '[:find ?e
+                 :in $ % ?s ?p ?o
+                 :where
+                 (subject ?e ?s)
+                 [?e ?p ?_o]
+                 (resolve-refs ?e ?p ?_o ?o)
+                 ]
+               db igraph-rules
+               s p o)
+          (catch Throwable e
+            (let [ed (ex-data e)]
+              (if (= (:db/error ed) :db.error/not-an-entity)
+                nil
+                (throw e))))))))
 
 (def value-to-value-type-atom
   "From https://docs.datomic.com/cloud/schema/schema-reference.html#db-valuetype"
@@ -507,7 +523,6 @@ Where
             (cleanup-orphans [g]
               ;; side-effect: retracts entities with no important
               ;; relationships
-              #dbg
               (letfn [(retract-entity-clause [e]
                         [:db/retractEntity e])
                       ]
@@ -539,11 +554,11 @@ Where
 
 (defmethod igraph/remove-from-graph [DatomicClient :vector]
   [g to-remove]
-  #dbg
   (igraph/remove-from-graph
    g
    (with-meta [to-remove]
      {:triples-format :vector-of-vectors})))
+
 
 (defmethod igraph/remove-from-graph [DatomicClient :normal-form]
   [g to-remove]
