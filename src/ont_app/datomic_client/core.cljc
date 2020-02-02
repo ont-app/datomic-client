@@ -116,6 +116,22 @@ Where
   conn)
     
 
+(defn get-entity-id [db s]
+  "Returns <e> for <s> in <g>
+Where
+<e> is the entity ID (a positive integer) in (:db <g>)
+<s> is a subject s.t. [<e> ::id <s>] in (:db <g>)
+<g> is an instance of DatascriptGraph
+"
+   (igraph/unique
+    (map first (d/q '[:find ?e
+                      :in $ % ?s
+                      :where (subject ?e ?s)
+                      ]
+                    db
+                    igraph-rules
+                    s))))
+
 (defn make-graph
   "Returns an instance of DatascriptGraph for `conn` and optional `db`
   Where
@@ -129,7 +145,49 @@ Where
   ([conn db]
    (->DatomicClient (ensure-igraph-schema conn) db)))
 
-  
+
+(def insignificant-attributes-atom "Caches insignificant attributes" (atom {}))
+
+(defn insignificant-attributes [conn]
+  "Returns #{<insignificant-attribute>, ...} for <conn>
+Where
+<insignificant attribute> is ignored when determining orphan-dom.
+"
+  (when (not (@insignificant-attributes-atom conn))
+    (glog/value-debug!
+     ::resetting-insignificant-attributes
+     (swap! insignificant-attributes-atom
+            assoc
+            conn
+            (into #{}
+                  (map first
+                       (d/q '[:find ?a
+                              :where [?a :db/ident :igraph/kwi]
+                              ]
+                            (d/db conn)))))))
+  (@insignificant-attributes-atom conn))
+    
+(defn orphaned? [db insignificant-attribute? e]
+  "Returns true iff <e> has only insiginficant attributes, and is not the subject of any triple in <conn>.
+"
+  #dbg
+  (empty?
+   (filter
+    (complement insignificant-attribute?)
+    (glog/value-debug!
+     ::attributes-in-orphaned
+     (map first
+          (glog/value-debug!
+           ::query-for-attributes
+           (d/q '[:find ?a
+                  :in $ ?e
+                  :where
+                  (or-join [?e ?a]
+                           [?e ?a ?v]
+                           [?x ?a ?e])]
+                db
+                e)))))))
+
 (defn get-subjects [db]
   "Returns (<s>, ...) for <db>, a lazy seq
 Where
@@ -139,6 +197,7 @@ Where
 <e> is an entity-id
 <unique-id> is any <p> s.t. <p>'s datatype is a unique ID.
 "
+  ;; TODO: check for orphans
   (map first
        (d/q '[:find ?s
               :in $ %
@@ -374,6 +433,8 @@ Where
                   (with-meta [triple]
                     {:triples-format :vector-of-vectors}))))))
 
+
+
 (defmethod igraph/remove-from-graph [DatomicClient :vector-of-vectors]
   [g to-remove]
   (glog/info! ::starting-remove-from-graph
@@ -384,17 +445,22 @@ Where
                 :log/g-t (:t (:db g))
                 :log/conn-t (:t (d/db (:conn g)))))
   (let [db (d/db (:conn g))
+        affected (atom #{})
         ]
-    (letfn [(e-for-subject [s]
-              (ffirst
-               (d/q
-                '[:find ?e
-                  :in $ % ?s
-                  :where (subject ?e ?s)
-                  ]
-                db
-                igraph-rules
-                s)))
+    (letfn [(register-affected [elt]
+              (swap! affected conj elt)
+              elt)
+            (e-for-subject [s]
+              (register-affected
+               (ffirst
+                (d/q
+                 '[:find ?e
+                   :in $ % ?s
+                   :where (subject ?e ?s)
+                   ]
+                 db
+                 igraph-rules
+                 s))))
             (collect-p-o [s e vacc [p o]]
               ;; adds a retraction triple for <s> <p> <o> to <vacc>
               ;; where <s>, <p> and <o> are elements from to-remove
@@ -424,7 +490,7 @@ Where
                                 :log/o o)
                     vacc)
                   ;; else there's an _o
-                  (reduce collect-p-o vacc [p o]))))
+                  (reduce conj vacc [p _o]))))
 
             (collect-retraction [vacc v]
               ;; returns [<retract-clause>, ...]
@@ -438,19 +504,44 @@ Where
                 (if (> (count retract-clause) 3)
                   (conj vacc retract-clause)
                   vacc)))
-                
+            (cleanup-orphans [g]
+              ;; side-effect: retracts entities with no important
+              ;; relationships
+              #dbg
+              (letfn [(retract-entity-clause [e]
+                        [:db/retractEntity e])
+                      ]
+                (let [orphans (filter (partial orphaned? (:db g)
+                                               (insignificant-attributes
+                                                (:conn g)))
+                                      @affected)
+                    ]
+                  (if (empty? orphans)
+                    g
+                    ;; else we need to remove orphans...
+                    (let []
+                      (d/transact
+                       (:conn g)
+                       {:tx-data
+                        (glog/value-debug!
+                         ::orphans-tx-data
+                         (into []
+                               (map retract-entity-clause orphans)))})
+                      (make-graph (:conn g)))))))
 
             ]
       ;;(e-for-subject (first to-remove))
-      (reduce collect-retraction [] to-remove)
+
       
-      #_(d/transact (:conn g)
-                  (into [] (map retraction to-remove)))
-      #_g)))
+      (d/transact (:conn g)
+                  {:tx-data (reduce collect-retraction [] to-remove)})
+      (cleanup-orphans (make-graph (:conn g))))))
 
 (defmethod igraph/remove-from-graph [DatomicClient :vector]
   [g to-remove]
+  #dbg
   (igraph/remove-from-graph
+   g
    (with-meta [to-remove]
      {:triples-format :vector-of-vectors})))
 
@@ -460,6 +551,7 @@ Where
             (conj vacc [s p o]))
           ]
     (igraph/remove-from-graph
+     g
      (with-meta (igraph/reduce-spo collect-vector
                                    []
                                    (graph/make-graph
