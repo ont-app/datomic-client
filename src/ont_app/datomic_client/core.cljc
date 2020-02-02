@@ -47,6 +47,8 @@ Where
   (ask [this s p o] (ask-s-p-o db s p o))
   (mutability [this] ::igraph/accumulate-only)
   (query [this query-spec] (d/q query-spec db))
+  ;; query-spec is map for 1-arity query mode see also
+  ;; https://docs.datomic.com/client-api/datomic.client.api.html
   
   #?(:clj clojure.lang.IFn
      :cljs cljs.core/IFn)
@@ -95,6 +97,7 @@ Where
                     )
                
                )]
+
      ]) ;; end rules
 
 (defn ensure-igraph-schema [conn]
@@ -244,15 +247,14 @@ Where
 
 (defmethod igraph/add-to-graph [DatomicClient :normal-form]
   [g triples]
+  (glog/info! :log/starting-add-to-graph
+              :triples triples)
   (when (not= (:t (:db g)) (:t (d/db (:conn g))))
     (glog/warn! :log/DiscontinuousDiscourse
                 :glog/message "Adding to conn with t-basis {{log/conn-t}} from graph with t-basis {{log/g-t}}."
                 :log/g-t (:t (:db g))
                 :log/conn-t (:t (d/db (:conn g)))))
 
-  (let [;; triples-graph (graph/make-graph :contents triples)
-        db-ids (atom {})
-        ]
   (letfn [
           (maybe-new-p [s p annotations o]
             ;; Declares new properties and the types of their objects
@@ -266,12 +268,13 @@ Where
           
           (maybe-new-ref [p annotations o]
             ;; Declares a new db/id for new references
-            (glog/warn! :log/starting-maybe-new-ref
-                        :p p
-                        :annotations annotations
-                        :value-type (annotations p :has-value-type))
+            (glog/debug! :log/starting-maybe-new-ref
+                         :p p
+                         :annotations annotations
+                         :o o
+                         :value-type (annotations p :has-value-type))
             (if (and (or (annotations p :has-value-type :db.type/ref)
-                         (g p :db/valueType :db/ref))
+                         (g p :db/valueType :db.type/ref))
                      (empty? (annotations :tx-data o))
                      )
               (let [db-id (subs (str o) 1)]
@@ -280,7 +283,6 @@ Where
                                                :igraph/kwi o})
                     ;; annotate the db/id for future reference
                     (assert-unique o :db/id db-id)))
-                
               annotations))
           
           (collect-assertion [s p annotations o]
@@ -309,7 +311,7 @@ Where
             ;;   and :igraph/kwi declaration for <s>
             ;; <value> may be <db-id> or <o> as appropriate
             (as-> annotations a
-                ;;(maybe-declare-kwi a s)
+              ;;(maybe-declare-kwi a s)
               (maybe-new-p s p a o)
               (maybe-new-ref p a o)
               (collect-assertion s
@@ -351,7 +353,7 @@ Where
       (d/transact (:conn g)
                   {:tx-data  (tx-data annotations)})
       
-      (make-graph (:conn g))))))
+      (make-graph (:conn g)))))
       
 
 ;; Declared in igraph.core
@@ -377,14 +379,6 @@ Where
                   (with-meta [triple]
                     {:triples-format :vector-of-vectors}))))))
 
-(defn- shared-keys [m1 m2]
-  "Returns {<shared key>...} for <m1> and <m2>
-Where
-<shared key> is a key in both maps <m1> and <m2>
-"
-  (set/intersection (set (keys m1))
-                    (set (keys m2))))
-
 
 (defmethod igraph/remove-from-graph [DatomicClient :vector-of-vectors]
   [g to-remove]
@@ -393,13 +387,64 @@ Where
                 :glog/message "Retracting from conn with t-basis {{log/conn-t}} from graph with t-basis {{log/g-t}}."
                 :log/g-t (:t (:db g))
                 :log/conn-t (:t (d/db (:conn g)))))
-  (letfn [(retraction [v]
-            (reduce conj [:db/retract] v))
-          ]
-    (map retraction to-remove))
-    #_(d/transact (:conn g)
-                (into [] (map retraction to-remove)))
-    #_g)
+  (let [db (d/db (:conn g))
+        ]
+    (letfn [(e-for-subject [s]
+              (ffirst
+               (d/q
+                '[:find ?e
+                  :in $ % ?s
+                  :where (subject ?e ?s)
+                  ]
+                db
+                igraph-rules
+                s)))
+            (collect-p-o [s e vacc [p o]]
+              (glog/debug! :log/starting-collect-p-o
+                           :p p
+                           :o o
+                           :e e)
+              (let [_o (ffirst (d/q '[:find ?o
+                                      :in $ ?e ?p ?o
+                                      :where [?e ?p ?o]
+                                      ]
+                                    db
+                                    e
+                                    p
+                                    (if (keyword? o)
+                                      (e-for-subject o)
+                                      o)))
+                    ]
+                (if (not _o)
+                  (let []
+                    (glog/warn! ::no-object-found
+                                :glog/message "No object '{{log/o}}' found to retract in [:db/retract {{log/s}} {{log/p}} {{log/o}}"
+                                :log/s s
+                                :log/p p
+                                :log/o o)
+                    vacc)
+                  ;; else there's an _o
+                  (reduce collect-p-o vacc [p o]))))
+
+            (collect-retraction [vacc v]
+              (let [e (e-for-subject (first v))
+                    retract-clause (reduce
+                                    (partial collect-p-o (first v) e)
+                                    [:db/retract e]
+                                    (partition 2 (rest v)))
+                    ]
+                (if (> (count retract-clause) 3)
+                  (conj vacc retract-clause)
+                  vacc)))
+                
+
+            ]
+      ;;(e-for-subject (first to-remove))
+      (reduce collect-retraction [] to-remove)
+      
+      #_(d/transact (:conn g)
+                  (into [] (map retraction to-remove)))
+      #_g)))
 
 
 
@@ -423,7 +468,7 @@ Where
 
 
 ;; SET OPERATIONS
-(defn graph-union [g1 g2]
+#_(defn graph-union [g1 g2]
   "Returns union of <g1> and <g2> using same schema as <g1>
 This uses igraph.graph/Graph as scratch, and probably won't scale.
 TODO:Redo when you have data to develop for scale.
@@ -434,7 +479,7 @@ TODO:Redo when you have data to develop for scale.
                             (igraph/add (graph/make-graph) (g1))
                             (igraph/add (graph/make-graph) (g2))))))
 
-(defn graph-difference [g1 g2]
+#_(defn graph-difference [g1 g2]
   "This uses igraph.graph/Graph as scratch, and probably won't scale.
 TODO:Redo when you have data to develop for scale.
 "
@@ -444,7 +489,7 @@ TODO:Redo when you have data to develop for scale.
                 (igraph/add (graph/make-graph) (g1))
                 (igraph/add (graph/make-graph) (g2))))))
 
-(defn graph-intersection [g1 g2]
+#_(defn graph-intersection [g1 g2]
   "This uses igraph.graph/Graph as scratch, and probably won't scale.
 TODO:Redo when you have data to develop for scale.
 "
@@ -455,7 +500,7 @@ TODO:Redo when you have data to develop for scale.
                 (igraph/add (graph/make-graph) (g2))))))
 
 
-(defn dummy-fn []
+#_(defn dummy-fn []
   "The eagle has landed")
     
 ;; TODO: do we need this?
@@ -761,3 +806,11 @@ Where
          [?_cardinality :db/ident ?cardinality]
          ]
        db ident))
+#_(defn- shared-keys [m1 m2]
+  "Returns {<shared key>...} for <m1> and <m2>
+Where
+<shared key> is a key in both maps <m1> and <m2>
+"
+  (set/intersection (set (keys m1))
+                    (set (keys m2))))
+
