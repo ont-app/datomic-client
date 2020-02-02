@@ -117,7 +117,7 @@ Where
     
 
 (defn make-graph
-  "Returns an instance of DatascriptGraph for `conn` and maybe `db`
+  "Returns an instance of DatascriptGraph for `conn` and optional `db`
   Where
   <conn> is a transactor, presumably initialized for domain-specific schemas
   <db> (optional) is a db filter on `conn`, default is the db as-of the
@@ -133,10 +133,11 @@ Where
 (defn get-subjects [db]
   "Returns (<s>, ...) for <db>, a lazy seq
 Where
-<s> is a keyword identifier
-<e> :igraph/kwi <s>, in <db>
-<e> is an entity-id
+<s> is a unique identifier for some <e>
 <db> is a datomic db
+<e> <unique-id> <s>, in <db>
+<e> is an entity-id
+<unique-id> is any <p> s.t. <p>'s datatype is a unique ID.
 "
   (map first
        (d/q '[:find ?s
@@ -179,9 +180,6 @@ Where
             {}
             (get-subjects db))))
 
-
-
-
 (defn query-for-o [db s p]
   "Returns #{<o>, ...} for <s> and <p> in <db>
 Where
@@ -197,8 +195,9 @@ Where
                       :in $ % ?s ?p
                       :where
                       (subject ?e ?s)
-                      [?e ?_p ?_o] 
-                      [?_p :db/ident ?p]
+                      ;;[?_p :db/ident ?p]
+                      ;;[?e ?_p ?_o]
+                      [?e ?p ?_o] 
                       (resolve-refs ?e ?p ?_o ?o)
                       ]
                     db igraph-rules s p))))
@@ -215,9 +214,6 @@ Where
                ]
              db igraph-rules
              s p o))))
-
-
-
 
 (def value-to-value-type-atom
   "From https://docs.datomic.com/cloud/schema/schema-reference.html#db-valuetype"
@@ -239,18 +235,20 @@ Where
     }))
 
 (defn map-value-to-value-type [value]
+  "Returns a :db.type/* for <value>
+Where 
+<value> is some graph element being claimed/retracted on some g"
   (or
    (@value-to-value-type-atom (type value))
    (cond
      (vector? value) :db.type/tuple)))
-        
 
 (defmethod igraph/add-to-graph [DatomicClient :normal-form]
   [g triples]
   (glog/info! ::starting-add-to-graph
-              :log/triples triples)
+              :log/normal-form triples)
   (when (not= (:t (:db g)) (:t (d/db (:conn g))))
-    (glog/warn! ::DiscontinuousDiscourse
+    (glog/warn! ::DiscontinuousModification
                 :glog/message "Adding to conn with t-basis {{log/conn-t}} from graph with t-basis {{log/g-t}}."
                 :log/g-t (:t (:db g))
                 :log/conn-t (:t (d/db (:conn g)))))
@@ -295,8 +293,6 @@ Where
               (assert-unique annotations
                              :tx-data s (assoc desc p o))))
 
-
-
           (pre-process [annotations s p o]
             ;; Returns graph with vocabulary :NewProperty :has-instance 
             ;;  :has-value-type :tx-data
@@ -305,13 +301,13 @@ Where
             ;; :tx-data <subject> <assertion map>
             ;; <p> :has-value-type <value type>
             ;; <o> :db/id <db-id>
-            ;; <value type> is a datomic value type
+            ;; <value type> := :db.type/*
             ;; <assertion map> := {<datalog-property> <value>, ...}
             ;;   including a possible :db/id for new <o> refs
-            ;;   and :igraph/kwi declaration for <s>
-            ;; <value> may be <db-id> or <o> as appropriate
+            ;;   and :igraph/kwi declaration for <s> and <o>
+            ;;   plus schema declarations for new <p>
+            ;; <value> may be <db-id> for refs or <o> otherwise
             (as-> annotations a
-              ;;(maybe-declare-kwi a s)
               (maybe-new-p s p a o)
               (maybe-new-ref p a o)
               (collect-assertion s
@@ -328,6 +324,7 @@ Where
               :db/cardinality :db.cardinality/many
               :db/doc (str "Declared automatically while importing")
               }))
+
           (tx-data [annotations]
             (glog/value-debug!
              ::tx-data-in-add-to-graph
@@ -345,6 +342,7 @@ Where
                       (graph/make-graph :contents triples))
           ]
       (when (not (empty? (annotations :NewProperty)))
+        ;; There are new properties to declare in the schema
         (d/transact (:conn g)
                     {:tx-data (reduce
                                (partial collect-schema-tx-data annotations)
@@ -354,9 +352,7 @@ Where
                   {:tx-data  (tx-data annotations)})
       
       (make-graph (:conn g)))))
-      
 
-;; Declared in igraph.core
 (defmethod igraph/add-to-graph [DatomicClient :vector-of-vectors]
   [g triples]
   (if (empty? triples)
@@ -364,28 +360,26 @@ Where
     (igraph/add-to-graph
      g
      (igraph/normal-form
-      (igraph/add (graph/make-graph)
+      (igraph/add (graph/make-graph) ;; use native graph as adapter
                   (with-meta triples
                     {:triples-format :vector-of-vectors}))))))
 
-;; Declared in igraph.core
 (defmethod igraph/add-to-graph [DatomicClient :vector] [g triple]
   (if (empty? triple)
     g
     (igraph/add-to-graph
      g
      (igraph/normal-form
-      (igraph/add (graph/make-graph)
+      (igraph/add (graph/make-graph) ;; use native graph as adapter
                   (with-meta [triple]
                     {:triples-format :vector-of-vectors}))))))
-
 
 (defmethod igraph/remove-from-graph [DatomicClient :vector-of-vectors]
   [g to-remove]
   (glog/info! ::starting-remove-from-graph
               :log/vector-of-vectors to-remove)
   (when (not= (:t (:db g)) (:t (d/db (:conn g))))
-    (glog/warn! ::DiscontinuousDiscourse
+    (glog/warn! ::DiscontinuousModification
                 :glog/message "Retracting from conn with t-basis {{log/conn-t}} from graph with t-basis {{log/g-t}}."
                 :log/g-t (:t (:db g))
                 :log/conn-t (:t (d/db (:conn g)))))
@@ -402,7 +396,10 @@ Where
                 igraph-rules
                 s)))
             (collect-p-o [s e vacc [p o]]
+              ;; adds a retraction triple for <s> <p> <o> to <vacc>
+              ;; where <s>, <p> and <o> are elements from to-remove
               (glog/debug! ::starting-collect-p-o
+                           :log/s s
                            :log/p p
                            :log/o o
                            :log/e e)
@@ -414,13 +411,14 @@ Where
                                     e
                                     p
                                     (if (keyword? o)
+                                      ;;... TODO check p schema for ref
                                       (e-for-subject o)
                                       o)))
                     ]
                 (if (not _o)
                   (let []
                     (glog/warn! ::no-object-found
-                                :glog/message "No object '{{log/o}}' found to retract in [:db/retract {{log/s}} {{log/p}} {{log/o}}"
+                                :glog/message "No object '{{log/o}}' found to retract in [:db/retract {{log/s}} {{log/p}} {{log/o}}. Skipping."
                                 :log/s s
                                 :log/p p
                                 :log/o o)
@@ -429,6 +427,8 @@ Where
                   (reduce collect-p-o vacc [p o]))))
 
             (collect-retraction [vacc v]
+              ;; returns [<retract-clause>, ...]
+              ;; where <retract-clause> := [:db/retract <s-id> p <o-id-or-val>]
               (let [e (e-for-subject (first v))
                     retract-clause (reduce
                                     (partial collect-p-o (first v) e)
@@ -448,24 +448,29 @@ Where
                   (into [] (map retraction to-remove)))
       #_g)))
 
-
-
-
 (defmethod igraph/remove-from-graph [DatomicClient :vector]
   [g to-remove]
-  g)
+  (igraph/remove-from-graph
+   (with-meta [to-remove]
+     {:triples-format :vector-of-vectors})))
 
-
+(defmethod igraph/remove-from-graph [DatomicClient :normal-form]
+  [g to-remove]
+  (letfn [(collect-vector [vacc s p o]
+            (conj vacc [s p o]))
+          ]
+    (igraph/remove-from-graph
+     (with-meta (igraph/reduce-spo collect-vector
+                                   []
+                                   (graph/make-graph
+                                    :contents to-remove))
+       {:triples-format :vector-of-vectors}))))
 
 (defmethod igraph/remove-from-graph [DatomicClient :underspecified-triple]
   [g to-remove]
   g)
 
-
-
-(defmethod igraph/remove-from-graph [DatomicClient :normal-form]
-  [g to-remove]
-  g)
+  
 
 
 
