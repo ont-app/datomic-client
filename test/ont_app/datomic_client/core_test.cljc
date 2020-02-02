@@ -27,22 +27,6 @@
 (def client (d/client cfg))
 (def conn (d/connect client {:db-name "hello"}))
 
-#_(def igraph-schema
-  [{:db/ident :igraph/kwi
-    :db/valueType :db.type/keyword
-    :db/unique :db.unique/identity
-    :db/doc "Names the subject"
-    :db/cardinality :db.cardinality/one}
-   {:db/ident :igraph/top
-    :db/valueType :db.type/boolean
-    :db/cardinality :db.cardinality/one
-    :db/doc (str "Indicates entities which are not otherwise elaborated."
-              "Use this if you encounter a Nothing found for entity id <x>"
-              "error.")
-    
-    }
-   ])
-
 (def movie-schema [{:db/ident :movie/title
                     :db/valueType :db.type/string
                     :db/cardinality :db.cardinality/one
@@ -66,6 +50,7 @@
 (def initial-graph (make-graph (add-schema conn)))
 
 (defmethod mint-kwi :movie/Movie
+  "Generates unique KWI for <title> made in <year>"
   [head-kwi & args]
   (let [{title :movie/title
          year :movie/release-year

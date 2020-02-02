@@ -247,10 +247,10 @@ Where
 
 (defmethod igraph/add-to-graph [DatomicClient :normal-form]
   [g triples]
-  (glog/info! :log/starting-add-to-graph
-              :triples triples)
+  (glog/info! ::starting-add-to-graph
+              :log/triples triples)
   (when (not= (:t (:db g)) (:t (d/db (:conn g))))
-    (glog/warn! :log/DiscontinuousDiscourse
+    (glog/warn! ::DiscontinuousDiscourse
                 :glog/message "Adding to conn with t-basis {{log/conn-t}} from graph with t-basis {{log/g-t}}."
                 :log/g-t (:t (:db g))
                 :log/conn-t (:t (d/db (:conn g)))))
@@ -268,10 +268,10 @@ Where
           
           (maybe-new-ref [p annotations o]
             ;; Declares a new db/id for new references
-            (glog/debug! :log/starting-maybe-new-ref
-                         :p p
-                         :annotations annotations
-                         :o o
+            (glog/debug! ::starting-maybe-new-ref
+                         :log/p p
+                         :log/annotations annotations
+                         :log/o o
                          :value-type (annotations p :has-value-type))
             (if (and (or (annotations p :has-value-type :db.type/ref)
                          (g p :db/valueType :db.type/ref))
@@ -330,7 +330,7 @@ Where
               }))
           (tx-data [annotations]
             (glog/value-debug!
-             :log/tx-data-in-add-to-graph
+             ::tx-data-in-add-to-graph
              [:log/annotations (igraph/normal-form annotations)]
              (reduce conj
                      []
@@ -382,8 +382,10 @@ Where
 
 (defmethod igraph/remove-from-graph [DatomicClient :vector-of-vectors]
   [g to-remove]
+  (glog/info! ::starting-remove-from-graph
+              :log/vector-of-vectors to-remove)
   (when (not= (:t (:db g)) (:t (d/db (:conn g))))
-    (glog/warn! :log/DiscontinuousDiscourse
+    (glog/warn! ::DiscontinuousDiscourse
                 :glog/message "Retracting from conn with t-basis {{log/conn-t}} from graph with t-basis {{log/g-t}}."
                 :log/g-t (:t (:db g))
                 :log/conn-t (:t (d/db (:conn g)))))
@@ -400,10 +402,10 @@ Where
                 igraph-rules
                 s)))
             (collect-p-o [s e vacc [p o]]
-              (glog/debug! :log/starting-collect-p-o
-                           :p p
-                           :o o
-                           :e e)
+              (glog/debug! ::starting-collect-p-o
+                           :log/p p
+                           :log/o o
+                           :log/e e)
               (let [_o (ffirst (d/q '[:find ?o
                                       :in $ ?e ?p ?o
                                       :where [?e ?p ?o]
