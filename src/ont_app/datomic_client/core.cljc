@@ -67,6 +67,7 @@ Where
   (intersection [g1 g2] (graph-intersection g1 g2))
   )
 
+
 (def igraph-schema
   [{:db/ident :igraph/kwi
     :db/valueType :db.type/keyword
@@ -115,6 +116,29 @@ Where
     (d/transact conn {:tx-data igraph-schema}))
   conn)
     
+(def standard-schema-subjects
+  "The set of subjects provided at time of schema creation."
+  #{:db/add :db/cardinality :db/cas :db/code :db/doc :db/ensure
+    :db/excise :db/fn :db/fulltext :db/ident :db/index :db/isComponent
+    :db/lang :db/noHistory :db/retract :db/retractEntity :db/system-tx
+    :db/tupleAttrs :db/tupleType :db/tupleTypes :db/txInstant
+    :db/unique :db/valueType :db.alter/attribute :db.attr/preds
+    :db.bootstrap/part :db.cardinality/many :db.cardinality/one
+    :db.entity/attrs :db.entity/preds :db.excise/attrs
+    :db.excise/before :db.excise/beforeT :db.fn/cas
+    :db.fn/retractEntity :db.install/attribute :db.install/function
+    :db.install/partition :db.install/valueType :db.lang/clojure
+    :db.lang/java :db.part/db :db.part/tx :db.part/user
+    :db.sys/partiallyIndexed :db.sys/reId :db.type/bigdec
+    :db.type/bigint :db.type/boolean :db.type/bytes :db.type/double
+    :db.type/float :db.type/fn :db.type/instant :db.type/keyword
+    :db.type/long :db.type/ref :db.type/string :db.type/symbol
+    :db.type/tuple :db.type/uri :db.type/uuid :db.unique/identity
+    :db.unique/value :fressian/tag :igraph/kwi}
+
+(def domain-subject?
+  "True when a KWI is not part of the standard schema"
+  (complement standard-schema-subjects))
 
 (defn get-entity-id [db s]
   "Returns <e> for <s> in <g>
@@ -123,14 +147,16 @@ Where
 <s> is a subject s.t. [<e> ::id <s>] in (:db <g>)
 <g> is an instance of DatascriptGraph
 "
-   (igraph/unique
-    (map first (d/q '[:find ?e
-                      :in $ % ?s
-                      :where (subject ?e ?s)
-                      ]
-                    db
-                    igraph-rules
-                    s))))
+  (glog/debug! ::starting-get-entity-id
+               :log/s s)
+  (igraph/unique
+   (map first (d/q '[:find ?e
+                     :in $ % ?s
+                     :where (subject ?e ?s)
+                     ]
+                   db
+                   igraph-rules
+                   s))))
 
 (defn make-graph
   "Returns an instance of DatascriptGraph for `conn` and optional `db`
@@ -188,6 +214,46 @@ Where
                 db
                 e)))))))
 
+(defn remove-orphans
+  "Returns <g'>, s.t. `candidates` are removed if they are orphans
+     i.e. not connected to other elements.
+  Side-effect: (:conn g)  will be modified accordingly.
+  Where
+  <g> is a datomic-client
+  <candidates> := #{<elt>, ...}, default (subjects g)
+  <elt> is an element in <g> which we suspect might be an orphan. It may be
+    an integer entity ID or a keyword unique identifier.
+  "
+  ([g]
+   (remove-orphans [g (subjects g)]))
+  ([g candidates]
+   (letfn [(ensure-entity-id [elt]
+             ;; returns the int entity id for <elt>
+             (if (int? elt)
+               elt
+               (get-entity-id (:db g) elt)))
+           (retract-entity-clause [e]
+                        [:db/retractEntity e])
+                      ]
+     (let [orphans (filter (partial orphaned? (:db g)
+                                    (insignificant-attributes
+                                     (:conn g)))
+                           (map ensure-entity-id candidates))
+                    ]
+       (if (empty? orphans)
+         g
+         ;; else we need to remove orphans...
+         (let []
+           (d/transact
+            (:conn g)
+            {:tx-data
+             (glog/value-debug!
+              ::orphans-tx-data
+              (into []
+                    (map retract-entity-clause orphans)))})
+           (make-graph (:conn g))))))))
+   
+   
 (defn get-subjects [db]
   "Returns (<s>, ...) for <db>, a lazy seq
 Where
@@ -197,7 +263,6 @@ Where
 <e> is an entity-id
 <unique-id> is any <p> s.t. <p>'s datatype is a unique ID.
 "
-  ;; TODO: check for orphans
   (map first
        (d/q '[:find ?s
               :in $ %
@@ -461,22 +526,14 @@ Where
                 :log/g-t (:t (:db g))
                 :log/conn-t (:t (d/db (:conn g)))))
   (let [db (d/db (:conn g))
-        affected (atom #{})
+        affected (atom #{}) ;; elements which may be orphaned
         ]
     (letfn [(register-affected [elt]
               (swap! affected conj elt)
               elt)
             (e-for-subject [s]
               (register-affected
-               (ffirst
-                (d/q
-                 '[:find ?e
-                   :in $ % ?s
-                   :where (subject ?e ?s)
-                   ]
-                 db
-                 igraph-rules
-                 s))))
+               (get-entity-id db s)))
             (collect-p-o [s e vacc [p o]]
               ;; adds a retraction triple for <s> <p> <o> to <vacc>
               ;; where <s>, <p> and <o> are elements from to-remove
@@ -520,29 +577,7 @@ Where
                 (if (> (count retract-clause) 3)
                   (conj vacc retract-clause)
                   vacc)))
-            (cleanup-orphans [g]
-              ;; side-effect: retracts entities with no important
-              ;; relationships
-              (letfn [(retract-entity-clause [e]
-                        [:db/retractEntity e])
-                      ]
-                (let [orphans (filter (partial orphaned? (:db g)
-                                               (insignificant-attributes
-                                                (:conn g)))
-                                      @affected)
-                    ]
-                  (if (empty? orphans)
-                    g
-                    ;; else we need to remove orphans...
-                    (let []
-                      (d/transact
-                       (:conn g)
-                       {:tx-data
-                        (glog/value-debug!
-                         ::orphans-tx-data
-                         (into []
-                               (map retract-entity-clause orphans)))})
-                      (make-graph (:conn g)))))))
+
 
             ]
       ;;(e-for-subject (first to-remove))
@@ -550,7 +585,7 @@ Where
       
       (d/transact (:conn g)
                   {:tx-data (reduce collect-retraction [] to-remove)})
-      (cleanup-orphans (make-graph (:conn g))))))
+      (remove-orphans (make-graph (:conn g)) @affected))))
 
 (defmethod igraph/remove-from-graph [DatomicClient :vector]
   [g to-remove]
@@ -575,12 +610,41 @@ Where
 
 (defmethod igraph/remove-from-graph [DatomicClient :underspecified-triple]
   [g to-remove]
-  g)
+  ;; underspecified triple is [s] or [s p]
+  (case (count to-remove)
+    1 (let [[s] to-remove
+            
+            ]
+        (d/transact (:conn g)
+                    {:tx-data [[:db/retractEntity (get-entity-id (:db g) s)]]}))
+    
+    2 (let [[s p] to-remove
+            affected (atom #{}) ;; possibly orphaned
+            ]
+        (letfn [(ensure-entity-id [elt]
+                  (cond
+                    (int? elt) elt
+                    (keyword? elt) (get-entity-id (:db g) elt)
+                    :default nil))
+                (affected-entity [elt]
+                  (let [e (ensure-entity-id elt)]
+                    (if e
+                      (let []
+                        (swap! affected conj e)
+                        e))))
+                  
+                (collect-retraction [vacc o]
+                  (conj
+                   vacc
+                   [:db/retract (affected-entity s)
+                    p
+                    (or (affected-entity o) o)]))
+                ]
+          (d/transact (:conn g)
+                      {:tx-data (reduce collect-retraction [] (g s p))})
+          (remove-orphans (make-graph (:conn g)) @affected)))))
 
   
-
-
-
 ;; SET OPERATIONS
 #_(defn graph-union [g1 g2]
   "Returns union of <g1> and <g2> using same schema as <g1>
