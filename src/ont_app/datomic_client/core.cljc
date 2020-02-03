@@ -67,6 +67,9 @@ Where
   (intersection [g1 g2] (graph-intersection g1 g2))
   )
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; IGRAPH SCHEMA DEFINITION AND UTILITIES
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (def igraph-schema
   [{:db/ident :igraph/kwi
@@ -134,7 +137,7 @@ Where
     :db.type/float :db.type/fn :db.type/instant :db.type/keyword
     :db.type/long :db.type/ref :db.type/string :db.type/symbol
     :db.type/tuple :db.type/uri :db.type/uuid :db.unique/identity
-    :db.unique/value :fressian/tag :igraph/kwi}
+    :db.unique/value :fressian/tag :igraph/kwi})
 
 (def domain-subject?
   "True when a KWI is not part of the standard schema"
@@ -157,8 +160,11 @@ Where
                    db
                    igraph-rules
                    s))))
+;;;;;;;;;;;;;;;;;;;;
+;; GRAPH CREATION
+;;;;;;;;;;;;;;;;;;;;
 
-(defn make-graph
+  (defn make-graph
   "Returns an instance of DatascriptGraph for `conn` and optional `db`
   Where
   <conn> is a transactor, presumably initialized for domain-specific schemas
@@ -171,6 +177,10 @@ Where
   ([conn db]
    (->DatomicClient (ensure-igraph-schema conn) db)))
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; ORPHANS
+;; Graph elements unconnected to other elements
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (def insignificant-attributes-atom "Caches insignificant attributes" (atom {}))
 
@@ -196,7 +206,6 @@ Where
 (defn orphaned? [db insignificant-attribute? e]
   "Returns true iff <e> has only insiginficant attributes, and is not the subject of any triple in <conn>.
 "
-  #dbg
   (empty?
    (filter
     (complement insignificant-attribute?)
@@ -252,8 +261,11 @@ Where
               (into []
                     (map retract-entity-clause orphans)))})
            (make-graph (:conn g))))))))
-   
-   
+
+;;;;;;;;;;;;;;;;;;;;
+;; MEMBER ACCESS
+;;;;;;;;;;;;;;;;;;;;
+
 (defn get-subjects [db]
   "Returns (<s>, ...) for <db>, a lazy seq
 Where
@@ -355,6 +367,9 @@ Where
                 nil
                 (throw e))))))))
 
+;;;;;;;;;;;;;;;;;;;;
+;; CLAIM/RETRACT
+;;;;;;;;;;;;;;;;;;;;
 (def value-to-value-type-atom
   "From https://docs.datomic.com/cloud/schema/schema-reference.html#db-valuetype"
   (atom
@@ -678,317 +693,4 @@ TODO:Redo when you have data to develop for scale.
                 (igraph/add (graph/make-graph) (g2))))))
 
 
-#_(defn dummy-fn []
-  "The eagle has landed")
-    
-;; TODO: do we need this?
-#_(defn get-entity-id [db s]
-  "Returns <e> for <s> in <g>
-Where
-<e> is the entity ID (a positive integer) in (:db <g>)
-<s> is a subject s.t. [<e> ::id <s>] in (:db <g>)
-<g> is an instance of DatascriptGraph
-"
-  (glog/debug! ::starting-get-entity-id
-               :log/db db
-               :log/subject s)
-  
-  (glog/value-debug!
-   :log/get-entity-id
-   [:log/subject s]
-   (igraph/unique
-    (d/q '[:find ?e :where [?e :igraph/kwi s]] db))))
-
-
-#_(defn old_get-subjects [db]
-  "Returns (<s>, ...) for <db>, a lazy seq
-Where
-<s> is a keyword identifier
-<e> :igraph/kwi <s>, in <db>
-<e> is an entity-id
-<db> is a datomic db
-"
-  (map first
-       (d/q '[:find ?s
-              :where [_ :igraph/kwi ?s]] db)))
-
-#_(defn old_query-for-p-o [db s]
-  "Returns <desc> for <s> in <db>
-Where
-<desc> := {<p> #{<o>, ...}, ...}
-"
-  (letfn [(collect-desc [desc [p o]]
-            (if (= p :igraph/kwi)
-              desc
-              (let [os (or (desc p) #{})
-                    ]
-                (assoc desc p (conj os o)))))
-          ]
-    (reduce collect-desc {}
-            (d/q '[:find ?p ?o
-                   :in $ ?s
-                   :where
-                   [?e :igraph/kwi ?s]
-                   [?e ?_p ?o] 
-                   [?_p :db/ident ?p]
-                   ]
-                 db s))))
-
-#_(defn old-query-for-o [db s p]
-  "Returns #{<o>, ...} for <s> and <p> in <db>
-Where
-<o> is a value for <s> and <p> in <db>
-<s> is a subject in <db>
-<p> is a predicate with schema definition in <db>
-<db> is a datomic db
-"
-  (reduce conj
-          #{}
-          (map first
-               (d/q '[:find ?o
-                      :in $ ?s ?p
-                      :where
-                      [?e :igraph/kwi ?s]
-                      [?e ?_p ?o]
-                      [?_p :db/ident ?p]]
-                    db s p))))
-#_(defmethod igraph/add-to-graph [DatomicClient :normal-form] [g triples]
-  (glog/debug! :log/starting-add-to-graph
-               :log/graph g
-               :log/triples triples)
-  (if (empty? triples)
-    g
-    (let [s->db-id (atom
-                    (into {}
-                          (map vector
-                               (keys triples)
-                               (map (comp - inc) (range)))))
-          check-o (fn [p o]
-                    ;; returns p of o checks out else throws error
-                    (when (some (complement keyword?) o)
-                      (throw (ex-info
-                              (str "No schema declaration for "
-                                   p
-                                   " and "
-                                   o
-                                   " contains non-keyword. "
-                                   "(Will only auto-declare for refs)")
-                              {:type ::no-schema-declaration
-                               :p p
-                               :o o})))
-                    p)
-          ;; find p's with no schema decl...
-          no-schema (reduce-kv (fn [acc s po]
-                                 (reduce-kv (fn [acc p o]
-                                              (glog/debug! :log/about-to-check-o
-                                                           :log/schema schema
-                                                           :log/property p)
-                                              (if (schema p)
-                                                acc
-                                                (conj acc (check-o p o))))
-                                            acc
-                                            po
-                                            ))
-                               #{}
-                               triples)
-          
-          ]
-      (letfn [(get-id [db s]
-                ;; returns nil or {::value ... ::new?...}
-                ;; new? means there was a keyword in object
-                ;; position not covered by a subject in the
-                ;; triples
-                (glog/debug! :log/starting-get-id
-                             :log/db db
-                             :log/subject s)
-                (if (not (keyword? s))
-                  (glog/value-debug! :log/non-keyword-s-in-get-id
-                                     [:log/subject s]
-                                     nil)
-                  ;; else s is a keyword
-                  (if-let [id (get-entity-id db s)]
-                    (do
-                      {::value id
-                       ::new? false})
-                    (if-let [id (@s->db-id s)]
-                      (do
-                        {::value id
-                         ::new? false})
-                      ;; else this is an object with no id
-                      ;; we need to add a new id for <s>
-                      (do (swap! s->db-id
-                                 (fn [m]
-                                   (assoc m s
-                                          (- (inc (count m))))))
-                          {::value (@s->db-id s)
-                           ::new? true})))
-                  ))
-              
-              (collect-datom [db id p acc o]
-                ;; returns {e :db/id <id>, <p> <o>}
-                (glog/debug! :log/starting-collect-datom
-                             :log/id id
-                             :log/property p
-                             :log/acc acc
-                             :log/object o)
-                (let [db-id (get-id db o)
-                      new? (and (::value db-id) (::new? db-id))
-                      o' (or (::value db-id)
-                             o)
-                      ]
-                  (conj (if new?
-                          (conj acc {:db/id o' ::id o})
-                          acc)
-                        {:db/id id p o'})))
-              
-              (collect-p-o [db id acc p o]
-                ;; accumulates [<datom>...]
-                (glog/debug! :log/starting-collect-p-o
-                             :log/id id
-                             :log/acc acc
-                             :log/property p
-                             :log/object o)
-                (reduce (partial collect-datom db id p) acc o))
-
-
-              (collect-s-po [db acc s po]
-                ;; accumulates [<datom>...]
-                (glog/debug! :log/starting-collect-s-po
-                             :log/acc acc
-                             :log/subject s
-                             :log/desc po)
-                (let [id (::value (get-id db s))
-                      ]
-                  (reduce-kv (partial collect-p-o db id)
-                             (conj acc {:db/id id, ::id s})
-                             po)))
-              
-              (update-schema [db]
-                ;; Intalls default schema declaration for new refs
-                (-> db
-                    (update 
-                     :schema
-                     (fn [schema]
-                       (reduce (fn [s p]
-                                 (assoc s p
-                                        {:db/type :db.type/ref
-                                         :db/cardinality :db.cardinality/many
-                                         }))
-                               schema
-                               no-schema)))
-                    (update
-                     :rschema
-                     (fn [rschema]
-                       (reduce (fn [r p]
-                                 (->
-                                  r
-                                  (update :db/index #(conj (or % #{})  p))
-                                  (update :db.type/ref #(conj (or % #{}) p))
-                                  (update :db.cardinality/many
-                                          #(conj (or % #{}) p))))
-                               rschema
-                               no-schema)))))
-
-              
-              ]
-        (let [db' (update-schema (:db g))
-              ]
-          (assoc g
-                 :db
-                 (d/db-with db'
-                            (reduce-kv (partial collect-s-po db')
-                                       []
-                                       triples))))))))
-
-#_(defmethod igraph/remove-from-graph [DatomicClient :vector-of-vectors]
-  [g to-remove]
-  (if (empty? to-remove)
-    g
-    (letfn [(collect-remove-clause [acc v]
-              (conj acc 
-                    (case (count v)
-                      1
-                      (let [[s] v
-                            ]
-                        [:db/retractEntity [::id s]])
-                      2
-                      (let [[s p] v
-                            ]
-                        [:db.fn/retractAttribute [::id s] p])
-                      3
-                      (let [[s p o] v
-                            o (if (= (:db/type ((:schema (:db g)) p))
-                                     :db.type/ref)
-                                [::id o]
-                                o)
-                            ]
-                        [:db/retract [::id s] p o]))))
-            ]
-      (assoc g :db
-             (d/db-with
-              (:db g)
-              (reduce collect-remove-clause
-                      []
-                      to-remove))))))
-
-#_(defmethod igraph/remove-from-graph [DatomicClient :vector]
-  [g to-remove]
-  (if (empty? to-remove)
-    g
-    (igraph/remove-from-graph g (with-meta
-                                  [to-remove]
-                                  {:triples-format :vector-of-vectors}))))
-#_(defmethod igraph/remove-from-graph [DatomicClient :underspecified-triple]
-  [g to-remove]
-  (if (empty? to-remove)
-    g
-    (igraph/remove-from-graph g (with-meta
-                                  [to-remove]
-                                  {:triples-format :vector-of-vectors}))))
-
-#_(defmethod igraph/remove-from-graph [DatomicClient :normal-form]
-  [g to-remove]
-  (if (empty? to-remove)
-    g
-    (letfn [(collect-o [acc o]
-              ;; acc is [s p]
-              (conj acc o)
-              )
-            (collect-p [s acc p]
-              ;; acc is [s]
-              (reduce collect-o
-                      (conj acc p)
-                      (get-in to-remove [s p]))
-              )
-            (collect-clause-for-s [acc s]
-              ;; accumulates <spo> 
-              (conj acc
-                    (reduce (partial collect-p s)
-                            [s]
-                            (keys (get to-remove s)))))
-
-            ]
-      (igraph/remove-from-graph
-       g
-       (with-meta
-         (graph/vector-of-triples (igraph/add (graph/make-graph) to-remove))
-         {:triples-format :vector-of-vectors})))))
-#_(defn query-schema [db ident]
-  (d/q '[:find ?ident ?valueType ?cardinality
-         :in $ ?ident
-         :where
-         [?e :db/ident ?ident]
-         [?e :db/valueType ?_valueType]
-         [?e :db/cardinality ?_cardinality]
-         [?_valueType :db/ident ?valueType]
-         [?_cardinality :db/ident ?cardinality]
-         ]
-       db ident))
-#_(defn- shared-keys [m1 m2]
-  "Returns {<shared key>...} for <m1> and <m2>
-Where
-<shared key> is a key in both maps <m1> and <m2>
-"
-  (set/intersection (set (keys m1))
-                    (set (keys m2))))
 
