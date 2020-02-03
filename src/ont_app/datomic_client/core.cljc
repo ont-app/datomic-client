@@ -30,6 +30,7 @@
 (declare query-for-o)
 (declare ask-s-p-o)
 (declare query-response)
+(declare datomic-query)
 
 (defrecord 
   ^{:doc "An IGraph compliant view on a Datascript graphs
@@ -46,7 +47,7 @@ Where
   (get-o [this s p] (query-for-o db s p))
   (ask [this s p o] (ask-s-p-o db s p o))
   (mutability [this] ::igraph/accumulate-only)
-  (query [this query-spec] (d/q query-spec db))
+  (query [this query-spec] (datomic-query db query-spec))
   ;; query-spec is map for 1-arity query mode see also
   ;; https://docs.datomic.com/client-api/datomic.client.api.html
   
@@ -60,11 +61,6 @@ Where
   igraph/IGraphAccumulateOnly
   (claim [this to-add] (igraph/add-to-graph this to-add))
   (retract [this to-subtract] (igraph/remove-from-graph this to-subtract))
-
-  igraph/IGraphSet
-  (union [g1 g2] (graph-union g1 g2))
-  (difference [g1 g2] (graph-difference g1 g2))
-  (intersection [g1 g2] (graph-intersection g1 g2))
   )
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -140,7 +136,7 @@ Where
     :db.unique/value :fressian/tag :igraph/kwi})
 
 (def domain-subject?
-  "True when a KWI is not part of the standard schema"
+  "True when a subject ID is not part of the standard schema"
   (complement standard-schema-subjects))
 
 (defn get-entity-id [db s]
@@ -160,6 +156,7 @@ Where
                    db
                    igraph-rules
                    s))))
+
 ;;;;;;;;;;;;;;;;;;;;
 ;; GRAPH CREATION
 ;;;;;;;;;;;;;;;;;;;;
@@ -366,6 +363,31 @@ Where
               (if (= (:db/error ed) :db.error/not-an-entity)
                 nil
                 (throw e))))))))
+
+(defn query-arity [q]
+  "Returns either :arity-1 or :arity-2 depending on the type of `q`
+Where
+<q> is a query posed to a datomic db.
+Maps are arity-1 and vectors are arity-2, with implicit db as 2nd arg"
+  (cond
+    (map? q) :arity-1
+    (vector? q) :arity-2))
+      
+(defmulti datomic-query
+  "Args: [db q]. Returns the result of a query `q` posed to `db`
+  Where
+  <q> is either a map conforming to datomic's arity-1 query or a vector
+  conforming to a :query clause, with implicit <db> as 2nd argument to d/q."
+  (fn [g q] (query-arity q)))
+
+(defmethod datomic-query :arity-1
+  [_ q]
+  (d/q q))
+
+(defmethod datomic-query :arity-2
+  [db q]
+  (d/q q db))
+
 
 ;;;;;;;;;;;;;;;;;;;;
 ;; CLAIM/RETRACT
