@@ -226,7 +226,7 @@ Where
   Side-effect: (:conn g)  will be modified accordingly.
   Where
   <g> is a datomic-client
-  <candidates> := #{<elt>, ...}, default (subjects g)
+  <candidates> := #{<elt>, ...}, (or any sequence) default (subjects g)
   <elt> is an element in <g> which we suspect might be an orphan. It may be
     an integer entity ID or a keyword unique identifier.
   "
@@ -364,6 +364,9 @@ Where
                 nil
                 (throw e))))))))
 
+;;;;;;;;;;;;
+;; Querying
+;;;;;;;;;;;;
 (defn query-arity [q]
   "Returns either :arity-1 or :arity-2 depending on the type of `q`
 Where
@@ -402,7 +405,7 @@ Maps are arity-1 and vectors are arity-2, with implicit db as 2nd arg"
     java.lang.Double :db.type/double
     java.lang.Float :db.type/float
     java.util.Date :db.type/instant
-    clojure.lang.Keyword :db.type/ref ;; note
+    clojure.lang.Keyword :db.type/ref ;; assume keywords are KWIs
     java.lang.Long :db.type/long
     java.lang.String :db.type/string
     clojure.lang.Symbol :db.type/symbol
@@ -422,7 +425,7 @@ Where
 
 (defmethod igraph/add-to-graph [DatomicClient :normal-form]
   [g triples]
-  (glog/info! ::starting-add-to-graph
+  (glog/debug! ::starting-add-to-graph
               :log/normal-form triples)
   (when (not= (:t (:db g)) (:t (d/db (:conn g))))
     (glog/warn! ::DiscontinuousModification
@@ -538,8 +541,7 @@ Where
      g
      (igraph/normal-form
       (igraph/add (graph/make-graph) ;; use native graph as adapter
-                  (with-meta triples
-                    {:triples-format :vector-of-vectors}))))))
+                  triples)))))
 
 (defmethod igraph/add-to-graph [DatomicClient :vector] [g triple]
   (if (empty? triple)
@@ -555,7 +557,7 @@ Where
 
 (defmethod igraph/remove-from-graph [DatomicClient :vector-of-vectors]
   [g to-remove]
-  (glog/info! ::starting-remove-from-graph
+  (glog/debug! ::starting-remove-from-graph
               :log/vector-of-vectors to-remove)
   (when (not= (:t (:db g)) (:t (d/db (:conn g))))
     (glog/warn! ::DiscontinuousModification
