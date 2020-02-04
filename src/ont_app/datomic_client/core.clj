@@ -319,20 +319,23 @@ Where
 <p> is a predicate with schema definition in <db>
 <db> is a datomic db
 "
-  (try 
-    (reduce conj
-            #{}
-            (map first
-                 (d/q '[:find ?o
-                        :in $ % ?s ?p
-                        :where
-                        (subject ?e ?s)
-                        ;;[?_p :db/ident ?p]
-                        ;;[?e ?_p ?_o]
-                        [?e ?p ?_o] 
-                        (resolve-refs ?e ?p ?_o ?o)
-                        ]
-                      db igraph-rules s p)))
+  (try
+    (let [os
+          (reduce conj
+                  #{}
+                  (map first
+                       (d/q '[:find ?o
+                              :in $ % ?s ?p
+                              :where
+                              (subject ?e ?s)
+                              ;;[?_p :db/ident ?p]
+                              ;;[?e ?_p ?_o]
+                              [?e ?p ?_o] 
+                              (resolve-refs ?e ?p ?_o ?o)
+                              ]
+                            db igraph-rules s p)))]
+      (if (not (empty? os))
+        os))
     (catch Throwable e
       (let [ed (ex-data e)]
         (if (= (:db/error ed) :db.error/not-an-entity)
