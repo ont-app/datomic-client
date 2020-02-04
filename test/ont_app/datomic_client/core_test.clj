@@ -1,21 +1,18 @@
 (ns ont-app.datomic-client.core-test
   (:require
-   #?(:cljs [cljs.test :refer-macros [async deftest is testing]]
-      :clj [clojure.test :refer :all])
+   [clojure.test :refer :all]
    [clojure.string :as str]
-   ;;
+   ;; 3rd party
    [datomic.client.api :as d]
+   ;; ont-app
    [ont-app.datomic-client.core :as dg :refer :all]
    [ont-app.graph-log.core :as glog]
-   [ont-app.igraph.core :as igraph :refer [add]]
+   [ont-app.igraph.core :as igraph :refer :all]
    [ont-app.igraph-vocabulary.core :as igv :refer [mint-kwi]]
    ))
 
 (def glog-config (add glog/ontology
                       [[:glog/LogGraph :glog/level :glog/DEBUG]
-                       ;;[:log/subject :rdf/type :glog/InformsUri]
-                       ;;[:log/property :rdf/type :glog/InformsUri]
-                       ;;[:log/object :rdf/type :glog/InformsUri]
                        ]))
 
 (def cfg {:server-type :peer-server
@@ -50,8 +47,8 @@
 (def initial-graph (make-graph (add-schema conn)))
 
 (defmethod mint-kwi :movie/Movie
-  "Generates unique KWI for <title> made in <year>"
   [head-kwi & args]
+  ;; Generates unique KWI for <title> made in <year>
   (let [{title :movie/title
          year :movie/release-year
          }
@@ -104,5 +101,5 @@
     (is (= 1 2))))
 
 (comment
-  (igraph/claim initial-graph [::a ::b ::c])
+  (claim initial-graph [::a ::b ::c])
   )

@@ -1,4 +1,8 @@
 (ns ont-app.datomic-client.ont
+  {
+  :vann/preferredNamespacePrefix "datomic-client"
+  :vann/preferredNamespaceUri "http://rdf.naturallexicon.org/datomic-client/ont#"
+  }
   (:require
    ;;
    [ont-app.igraph.core :as igraph :refer [add]]
@@ -7,14 +11,10 @@
    [ont-app.vocabulary.core :as voc]
    )
   )
-(voc/cljc-put-ns-meta!
- 'ont-app.validation.ont
- {
-  :vann/preferredNamespacePrefix "datomic-client"
-  :vann/preferredNamespaceUri "http://rdf.naturallexicon.org/datomic-client/ont#"
-  })
 
 (def ontology-atom (atom (make-graph)))
+
+;; TODO: IS THERE A PUBLIC ONTOLOGY FOR THIS?
 
 (defn update-ontology [to-add]
   (swap! ontology-atom add to-add))

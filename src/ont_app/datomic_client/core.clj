@@ -1,4 +1,8 @@
 (ns ont-app.datomic-client.core
+  "Ports datomic.client.api to IGraph protocol with accumulate-only mutability"
+  {
+   :voc/mapsTo 'ont-app.datomic-client.ont
+   }
   (:require
    [clojure.set :as set]
    ;; 3rd party
@@ -11,15 +15,7 @@
    [ont-app.vocabulary.core :as voc]
    ))
 
-(voc/cljc-put-ns-meta!
- 'ont-app.datomic-client.core
- {
-  :voc/mapsTo 'ont-app.datomic-client.ont
-  }
- )
-
 (def ontology @ont/ontology-atom)
-
 
 (declare graph-union)
 (declare graph-difference)
@@ -48,11 +44,8 @@ Where
   (ask [this s p o] (ask-s-p-o db s p o))
   (mutability [this] ::igraph/accumulate-only)
   (query [this query-spec] (datomic-query db query-spec))
-  ;; query-spec is map for 1-arity query mode see also
-  ;; https://docs.datomic.com/client-api/datomic.client.api.html
-  
-  #?(:clj clojure.lang.IFn
-     :cljs cljs.core/IFn)
+
+  clojure.lang.IFn
   (invoke [g] (igraph/normal-form g))
   (invoke [g s] (igraph/get-p-o g s))
   (invoke [g s p] (igraph/match-or-traverse g s p))
@@ -136,7 +129,7 @@ Where
     :db.unique/value :fressian/tag :igraph/kwi})
 
 (def domain-subject?
-  "True when a subject ID is not part of the standard schema"
+  "True when a subject ID is not part of the standard schema."
   (complement standard-schema-subjects))
 
 (defn get-entity-id [db s]
@@ -146,16 +139,17 @@ Where
 <s> is a subject s.t. [<e> ::id <s>] in (:db <g>)
 <g> is an instance of DatascriptGraph
 "
-  (glog/debug! ::starting-get-entity-id
-               :log/s s)
-  (igraph/unique
-   (map first (d/q '[:find ?e
-                     :in $ % ?s
-                     :where (subject ?e ?s)
-                     ]
-                   db
-                   igraph-rules
-                   s))))
+  (glog/value-debug!
+   ::entity-id
+   [:log/s s]
+   (igraph/unique
+    (map first (d/q '[:find ?e
+                      :in $ % ?s
+                      :where (subject ?e ?s)
+                      ]
+                    db
+                    igraph-rules
+                   s)))))
 
 ;;;;;;;;;;;;;;;;;;;;
 ;; GRAPH CREATION
