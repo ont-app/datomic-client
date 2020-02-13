@@ -64,8 +64,19 @@ Where
   [{:db/ident :igraph/kwi
     :db/valueType :db.type/keyword
     :db/unique :db.unique/identity
-    :db/doc "Uniquely names a graph element"
     :db/cardinality :db.cardinality/one
+    :db/doc "Uniquely names a graph element"
+    }
+   {:db/ident :igraph/edn?
+    :db/valueType :db.type/boolean
+    :db/cardinality :db.cardinality/one
+    :db/doc "domain is string-valued properties. True if value should be read as edn."
+    }
+   {:db/ident :igraph/my-map
+    :db/valueType :db.type/string
+    :db/cardinality :db.cardinality/one
+    :igraph/edn? true
+    :db/doc "remove me"
     }
    ])
 
@@ -107,7 +118,8 @@ Where
                      (d/db conn)))
     (d/transact conn {:tx-data igraph-schema}))
   conn)
-    
+
+
 (def standard-schema-subjects
   "The set of subjects provided at time of schema creation."
   #{:db/add :db/cardinality :db/cas :db/code :db/doc :db/ensure
@@ -127,6 +139,7 @@ Where
     :db.type/long :db.type/ref :db.type/string :db.type/symbol
     :db.type/tuple :db.type/uri :db.type/uuid :db.unique/identity
     :db.unique/value :fressian/tag :igraph/kwi})
+
 
 (def domain-subject?
   "True when a subject ID is not part of the standard schema."
@@ -150,6 +163,48 @@ Where
                     db
                     igraph-rules
                    s)))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;
+;; edn-encoded objects
+;;;;;;;;;;;;;;;;;;;;;;;;
+(def edn-properties (atom {}))
+(defn clear-edn-properties-cache! []
+  (reset! edn-properties {})
+  )
+(defn edn-property? [db p]
+  "Returns true iff (g `p` :igraph/edn? true) for g of `db`
+Where
+<p> names a property in <db>
+Note: typically used when deciding whether to encode/decode objects as edn.
+"
+  (when (not (@edn-properties db))
+    (letfn [(collect-p [sacc [p is-edn?]]
+              (if is-edn?
+                (conj sacc p)
+                sacc))
+            ]
+      (swap!  edn-properties
+              assoc db
+              (reduce collect-p
+                      (or (@edn-properties db)
+                          #{})
+                      (d/q '[:find ?p ?is-edn
+                             :where
+                             [?_p :igraph/edn? ?is-edn]
+                             [?_p :db/ident ?p]]
+                           db)))))
+  ((@edn-properties db) p))
+
+(defn maybe-encode-edn [db p o]
+  (if (edn-property? db p)
+    (str o)
+    o))
+
+(defn maybe-read-edn [db p o]
+  (if (and (string? o)
+           (edn-property? db p))
+    (clojure.edn/read-string o)
+    o))
 
 ;;;;;;;;;;;;;;;;;;;;
 ;; GRAPH CREATION
@@ -276,6 +331,7 @@ Where
                       ]
                     db igraph-rules))))
 
+
 (defn query-for-p-o [db s]
   "Returns <desc> for <s> in <db>
 Where
@@ -286,7 +342,7 @@ Where
               desc
               (let [os (or (desc p) #{})
                     ]
-                (assoc desc p (conj os o)))))
+                (assoc desc p (conj os (maybe-read-edn db p o))))))
           ]
     (let [desc
           (reduce collect-desc {}
@@ -326,15 +382,18 @@ Where
     (let [os
           (reduce conj
                   #{}
-                  (map first
-                       (d/q '[:find ?o
-                              :in $ % ?s ?p
-                              :where
-                              (subject ?e ?s)
-                              [?e ?p ?_o] 
-                              (resolve-refs ?e ?p ?_o ?o) ;; todo do we need this?
-                              ]
-                            db igraph-rules s p)))]
+                  (map
+                   (partial maybe-read-edn db p)
+                   (map first
+                        (d/q '[:find ?o
+                               :in $ % ?s ?p
+                               :where
+                               (subject ?e ?s)
+                               [?e ?p ?_o] 
+                               (resolve-refs ?e ?p ?_o ?o)
+                               ;; todo do we need this?
+                               ]
+                             db igraph-rules s p))))]
       (if (not (empty? os))
         os))
     (catch Throwable e
@@ -355,7 +414,7 @@ Where
                  (resolve-refs ?e ?p ?_o ?o)
                  ]
                db igraph-rules
-               s p o)
+               s p (maybe-encode-edn db p o))
           (catch Throwable e
             (let [ed (ex-data e)]
               (if (= (:db/error ed) :db.error/not-an-entity)
@@ -418,8 +477,10 @@ Where
 <value> is some graph element being claimed/retracted on some g"
   (or
    (@value-to-value-type-atom (type value))
-   (cond
-     (vector? value) :db.type/tuple)))
+   :edn-string))
+
+
+
 
 (defmethod igraph/add-to-graph [DatomicClient :normal-form]
   [g triples]
@@ -430,7 +491,6 @@ Where
                 :glog/message "Adding to conn with t-basis {{log/conn-t}} from graph with t-basis {{log/g-t}}."
                 :log/g-t (:t (:db g))
                 :log/conn-t (:t (d/db (:conn g)))))
-  #dbg
   (letfn [
           (maybe-new-p [s p annotations o]
             ;; Declares new properties and the types of their objects
@@ -476,11 +536,15 @@ Where
                             })
                   ]
               (assert-unique annotations
-                             :tx-data s (glog/value-warn!
+                             :tx-data s (glog/value-debug!
                                          :adding-annotation
                                          [:log/s s
                                           :log/o o]
-                                         (assoc desc p o)))))
+                                         (assoc desc p
+                                                (maybe-encode-edn
+                                                 (:db g)
+                                                 p
+                                                 o))))))
 
           (pre-process [annotations s p o]
             ;; Returns graph with vocabulary :NewProperty :has-instance 
@@ -506,13 +570,25 @@ Where
                                      o))))
           
           (collect-schema-tx-data [annotations vacc p]
-            (conj
-             vacc
-             {:db/ident p
-              :db/valueType (unique (annotations p :has-value-type))
-              :db/cardinality :db.cardinality/many
-              :db/doc (str "Declared automatically while importing")
-              }))
+            (let [value-type (unique (annotations p :has-value-type))
+                  m {:db/ident p
+                     :db/cardinality :db.cardinality/many
+                     :db/doc (str "Declared automatically while importing")
+                     } 
+                  ]
+              (conj
+               vacc
+               (if (= value-type :edn-string)
+                 (let []
+                   (clear-edn-properties-cache!)
+                   (assoc m
+                          :db/valueType :db.type/string
+                          :igraph/edn? true)
+                   )
+                 ;; else it's not an edn string
+                 (assoc m
+                        :db/valueType value-type)))))
+
 
           (tx-data [annotations]
             (glog/value-debug!
