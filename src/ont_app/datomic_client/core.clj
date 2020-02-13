@@ -360,9 +360,12 @@ Where
         desc))))
 
 (defn get-normal-form [db]
-  "Returns {<s> {<p> #{<o>, ...}, ...}, ...} for all <s> in <db>
+  "Returns {<s> {<p> #{<o>, ...}, ...}, ...} for all <s> in `db`
 Where
-<e> :igraph/kwi <s>"
+<e> :igraph/kwi <s>
+<e> is an ID in <db>
+<db> is a datomic DB
+"
   (letfn [(collect-descriptions [m s]
             (assoc m s (query-for-p-o db s)))
           ]
@@ -371,12 +374,12 @@ Where
             (get-subjects db))))
 
 (defn query-for-o [db s p]
-  "Returns #{<o>, ...} for <s> and <p> in <db>
+  "Returns #{<o>, ...} for `s` and `p` in `db`
 Where
-<o> is a value for <s> and <p> in <db>
+<o> is a value for <db> s.t. <s> <p>  <o> 
 <s> is a subject in <db>
 <p> is a predicate with schema definition in <db>
-<db> is a datomic db
+<db> is a datomic DB
 "
   (try
     (let [os
@@ -479,9 +482,6 @@ Where
    (@value-to-value-type-atom (type value))
    :edn-string))
 
-
-
-
 (defmethod igraph/add-to-graph [DatomicClient :normal-form]
   [g triples]
   (glog/debug! ::starting-add-to-graph
@@ -491,7 +491,8 @@ Where
                 :glog/message "Adding to conn with t-basis {{log/conn-t}} from graph with t-basis {{log/g-t}}."
                 :log/g-t (:t (:db g))
                 :log/conn-t (:t (d/db (:conn g)))))
-  (letfn [
+  
+  (letfn [;; See comments for 'pre-process', below for notes on <annotations>
           (maybe-new-p [s p annotations o]
             ;; Declares new properties and the types of their objects
             ;; It is expected that all objects are of the same type
@@ -547,18 +548,25 @@ Where
                                                  o))))))
 
           (pre-process [annotations s p o]
-            ;; Returns graph with vocabulary :NewProperty :has-instance 
-            ;;  :has-value-type :tx-data
-            ;; Where
-            ;; :NewProperty :hasInstance <p>
-            ;; :tx-data <subject> <assertion map>
-            ;; <p> :has-value-type <value type>
-            ;; <o> :db/id <db-id>
-            ;; <value type> := :db.type/*
+            ;; a reduce-spo function
+            ;; Accumulates 'annotations' graph structured as:
+            ;; {:NewProperty {:has-instance #{<p>, ...}}
+            ;;  :tx-data  {<subject> #{<assertion-map>}, ...}
+            ;;  <p> {:has-value-type #{<value-type>}}
+            ;;  <o> {:db/id #{<db-id>}}
+            ;;  }
+            ;; <subject> a kwi naming an entity in <db>
+            ;; <p> a kwi naming a new property for <db>
+            ;; <o> an object value (possibly a kwi)
+            ;; <assertion-map> {<datalog-property> <value>, ...}
+            ;; <value type> := :db.type/* or :edn-string
+            ;;  :edn-string signals that the object should be
+            ;;  encoded as edn and read into an object on retrieval
             ;; <assertion map> := {<datalog-property> <value>, ...}
             ;;   including a possible :db/id for new <o> refs
             ;;   and :igraph/kwi declaration for <s> and <o>
             ;;   plus schema declarations for new <p>
+            ;;   or :igraph/edn? declaration for :edn-string's
             ;; <value> may be <db-id> for refs or <o> otherwise
             (as-> annotations a
               (maybe-new-p s p a o)
@@ -600,7 +608,7 @@ Where
                      ;; <s-tx-data> := {<p> <o>, ...}
                      (map unique (vals (annotations :tx-data))))))
           ]
-    
+    ;; main body of function
     (let [annotations 
           (reduce-spo pre-process
                       (graph/make-graph)
@@ -663,6 +671,7 @@ Where
             (collect-p-o [s e vacc [p o]]
               ;; adds a retraction triple for <s> <p> <o> to <vacc>
               ;; where <s>, <p> and <o> are elements from to-remove
+              ;; <e> is the ID of <s>
               (glog/debug! ::starting-collect-p-o
                            :log/s s
                            :log/p p
@@ -682,7 +691,7 @@ Where
                     ]
                 (if (not _o)
                   (let []
-                    (glog/warn! ::no-object-found
+                    (glog/warn! ::no-object-found-to-retract
                                 :glog/message "No object '{{log/o}}' found to retract in [:db/retract {{log/s}} {{log/p}} {{log/o}}. Skipping."
                                 :log/s s
                                 :log/p p
@@ -694,6 +703,7 @@ Where
             (collect-retraction [vacc v]
               ;; returns [<retract-clause>, ...]
               ;; where <retract-clause> := [:db/retract <s-id> p <o-id-or-val>]
+              ;; <v> := [<s> <p> <o> & maybe <p>, <o>, ...]
               (let [e (e-for-subject (first v))
                     retract-clause (reduce
                                     (partial collect-p-o (first v) e)
@@ -705,7 +715,9 @@ Where
                   vacc)))
 
 
-            ]
+            ] ;; letfn
+      
+      ;; main body of function
       (d/transact (:conn g)
                   {:tx-data (reduce collect-retraction [] to-remove)})
       (remove-orphans (make-graph (:conn g)) @affected))))
