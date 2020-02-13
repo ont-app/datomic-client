@@ -4,25 +4,37 @@
    [clojure.string :as str]
    ;; 3rd party
    [datomic.client.api :as d]
+   [environ.core :refer [env]]
    ;; ont-app
    [ont-app.datomic-client.core :as dg :refer :all]
    [ont-app.graph-log.core :as glog]
    [ont-app.igraph.core :as igraph :refer :all]
+   [ont-app.igraph.core-test :as igraph-test]
+   [ont-app.igraph.graph :as g]
    [ont-app.igraph-vocabulary.core :as igv :refer [mint-kwi]]
    ))
+
 
 (def glog-config (add glog/ontology
                       [[:glog/LogGraph :glog/level :glog/DEBUG]
                        ]))
 
 (def cfg {:server-type :peer-server
-          :access-key "myaccesskey"
-          :secret "mysecret"
-          :endpoint "localhost:8998"
+          :access-key (env :datomic-access-key) ;;"myaccesskey"
+          :secret (env :datomic-secret) ;;"mysecret"
+          :endpoint (str (env :datomic-host) ":" (env :datomic-port))
+          ;; ... "localhost:8998"
           :validate-hostnames false})
 
 (def client (d/client cfg))
 (def conn (d/connect client {:db-name "hello"}))
+
+(defn retract-content [conn]
+  "Retracts all non-schema content from the db at head of `conn`."
+  (let [g (dg/make-graph conn)]
+    (doseq [s (filter (fn [s] (not (g s :db/ident)))
+                      (subjects (dg/make-graph conn)))]
+      (retract g [s]))))
 
 (def movie-schema [{:db/ident :movie/title
                     :db/valueType :db.type/string
@@ -37,14 +49,15 @@
                    {:db/ident :movie/release-year
                     :db/valueType :db.type/long
                     :db/cardinality :db.cardinality/one
-                    :db/doc "The year the movie was released in theaters"}])
+                    :db/doc "The year the movie was released in theaters"}
+                   ])
 
 
-(defn add-schema [conn]
+#_(defn add-schema [conn]
   (d/transact conn {:tx-data (reduce conj dg/igraph-schema movie-schema)})
   conn)
 
-(def initial-graph (make-graph (add-schema conn)))
+;; (def initial-graph (make-graph (add-schema conn)))
 
 (defmethod mint-kwi :movie/Movie
   [head-kwi & args]
@@ -95,7 +108,52 @@
 ;; (def g (make-graph conn))
 
 
-  
+(reset! igraph-test/eg (let []
+                         (retract-content conn)
+                         (igraph/claim (dg/make-graph conn)
+                                       igraph-test/eg-data)))
+
+(reset! igraph-test/other-eg (let []
+                               (retract-content conn)
+                               (igraph/claim (dg/make-graph conn)
+                                             igraph-test/other-eg-data)))
+
+(defn add-eg-type-schema [conn]
+  (d/transact
+   conn
+   {:tx-data
+    [{:db/ident :ig-ctest/subClassOf
+      :db/valueType :db.type/ref
+      :db/cardinality :db.cardinality/many
+      :db/doc "Toy subclass-of relation"
+      }
+     {:db/ident :ig-ctest/isa
+      :db/valueType :db.type/ref
+      :db/cardinality :db.cardinality/many
+      :db/doc "Toy instance-of relation"
+      }
+     {:db/ident :ig-ctest/has-vector
+      :db/valueType :db.type/tuple
+      :db/tupleType :db.type/long
+      :db/cardinality :db.cardinality/one
+      :db/doc "Holds a vector of integers, used to test cardinality-1 utilties"
+      }
+     ]}))
+        
+(reset! igraph-test/eg-with-types
+        (let []
+          (retract-content conn)
+          (add-eg-type-schema conn)
+          (igraph/claim (dg/make-graph conn)
+                        (glog/value-warn!
+                         ::eg-with-types-claims
+                         (normal-form
+                          (union (add (g/make-graph)
+                                      igraph-test/eg-data)
+                                 (add (g/make-graph)
+                                      igraph-test/types-data)))))))
+                         
+
 (deftest dummy-test
   (testing "fixme"
     (is (= 1 2))))

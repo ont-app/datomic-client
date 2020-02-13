@@ -266,12 +266,15 @@ Where
 <e> is an entity-id
 <unique-id> is any <p> s.t. <p>'s datatype is a unique ID.
 "
-  (map first
-       (d/q '[:find ?s
-              :in $ %
-              :where
-              (subject ?e ?s)]
-            db igraph-rules)))
+  (filter (fn [s]
+            (query-for-p-o db s)) ;; TODO: there's probably a more efficent way
+          (map first
+               (d/q '[:find ?s
+                      :in $ %
+                      :where
+                      (subject ?e ?s)
+                      ]
+                    db igraph-rules))))
 
 (defn query-for-p-o [db s]
   "Returns <desc> for <s> in <db>
@@ -293,7 +296,7 @@ Where
                          (subject ?e ?s)
                          [?e ?_p ?_o]
                          [?_p :db/ident ?p]
-                         (resolve-refs ?e ?p ?_o ?o)
+                         (resolve-refs ?e ?_p ?_o ?o)
                          ]
                        db igraph-rules s))
           ]
@@ -328,10 +331,8 @@ Where
                               :in $ % ?s ?p
                               :where
                               (subject ?e ?s)
-                              ;;[?_p :db/ident ?p]
-                              ;;[?e ?_p ?_o]
                               [?e ?p ?_o] 
-                              (resolve-refs ?e ?p ?_o ?o)
+                              (resolve-refs ?e ?p ?_o ?o) ;; todo do we need this?
                               ]
                             db igraph-rules s p)))]
       (if (not (empty? os))
@@ -429,7 +430,7 @@ Where
                 :glog/message "Adding to conn with t-basis {{log/conn-t}} from graph with t-basis {{log/g-t}}."
                 :log/g-t (:t (:db g))
                 :log/conn-t (:t (d/db (:conn g)))))
-
+  #dbg
   (letfn [
           (maybe-new-p [s p annotations o]
             ;; Declares new properties and the types of their objects
@@ -440,7 +441,16 @@ Where
                                  :has-value-type
                                  (map-value-to-value-type o)]])
               annotations))
-          
+
+          (ensure-db-id-tx-data [annotations o db-id]
+            (let [tx-data (or (unique (annotations :tx-data o))
+                              {})
+                  ]
+              (if (tx-data :db/id)
+                annotations
+                (assert-unique annotations :tx-data o (assoc tx-data
+                                                             :db/id db-id
+                                                             :igraph/kwi o)))))
           (maybe-new-ref [p annotations o]
             ;; Declares a new db/id for new references
             (glog/debug! ::starting-maybe-new-ref
@@ -448,16 +458,14 @@ Where
                          :log/annotations annotations
                          :log/o o
                          :value-type (annotations p :has-value-type))
-            (if (and (or (annotations p :has-value-type :db.type/ref)
-                         (g p :db/valueType :db.type/ref))
-                     (empty? (annotations :tx-data o))
-                     )
+            (if (or (annotations p :has-value-type :db.type/ref)
+                    (g p :db/valueType :db.type/ref))
               (let [db-id (subs (str o) 1)]
                 (-> annotations
-                    (assert-unique :tx-data o {:db/id db-id
-                                               :igraph/kwi o})
+                    (ensure-db-id-tx-data o db-id)
                     ;; annotate the db/id for future reference
                     (assert-unique o :db/id db-id)))
+              ;; else no db-id or ref
               annotations))
           
           (collect-assertion [s p annotations o]
@@ -468,7 +476,11 @@ Where
                             })
                   ]
               (assert-unique annotations
-                             :tx-data s (assoc desc p o))))
+                             :tx-data s (glog/value-warn!
+                                         :adding-annotation
+                                         [:log/s s
+                                          :log/o o]
+                                         (assoc desc p o)))))
 
           (pre-process [annotations s p o]
             ;; Returns graph with vocabulary :NewProperty :has-instance 
@@ -521,10 +533,14 @@ Where
       (when (not (empty? (annotations :NewProperty)))
         ;; There are new properties to declare in the schema
         (d/transact (:conn g)
-                    {:tx-data (reduce
-                               (partial collect-schema-tx-data annotations)
-                               []
-                               (annotations :NewProperty :has-instance))}))
+                    {:tx-data
+                     (glog/value-debug!
+                      ::schema-update-tx-data
+                      (reduce
+                       (partial collect-schema-tx-data annotations)
+                       []
+                       (annotations :NewProperty :has-instance)))
+                     }))
       (d/transact (:conn g)
                   {:tx-data  (tx-data annotations)})
       
@@ -549,8 +565,6 @@ Where
       (igraph/add (graph/make-graph) ;; use native graph as adapter
                   (with-meta [triple]
                     {:triples-format :vector-of-vectors}))))))
-
-
 
 (defmethod igraph/remove-from-graph [DatomicClient :vector-of-vectors]
   [g to-remove]
@@ -616,9 +630,6 @@ Where
 
 
             ]
-      ;;(e-for-subject (first to-remove))
-
-      
       (d/transact (:conn g)
                   {:tx-data (reduce collect-retraction [] to-remove)})
       (remove-orphans (make-graph (:conn g)) @affected))))

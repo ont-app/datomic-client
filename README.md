@@ -6,9 +6,21 @@ Part of the ont-app library, dedicated to Ontology-driven development.
 
 FIXME
 
+## Testing
+
+Testing requires a datomic server to be running, with the following environment variables:
+
+- :datomic-host , e.g "localhost"
+- :datomic-port, e.g. 8998
+- :datomic-access-key, e.g. "myaccesskey"
+- :datomic-secret, e.g. "mysecret"
+- :datomic-db-name e.g. "hello"
+
+See also the [datomic documentation](https://docs.datomic.com/on-prem/getting-started/connect-to-a-database.html).
+
 ## License
 
-Copyright © 2019 FIXME
+Copyright © 2020 Eric D. Scott
 
 This program and the accompanying materials are made available under the
 terms of the Eclipse Public License 2.0 which is available at

@@ -7,6 +7,7 @@
                  [org.clojure/spec.alpha "0.2.176"]
                  ;; 3rd party libs
                  [com.datomic/client-pro "0.9.41"]
+                 [environ "1.1.0"]
                  ;; Ont-app libs
                  [ont-app/graph-log "0.1.0-SNAPSHOT"]
                  [ont-app/igraph "0.1.4-SNAPSHOT"]
@@ -26,6 +27,6 @@
   :codox {:output-path "doc"}
 
   :profiles {:uberjar {:aot :all}
-             :dev {:source-paths ["src"] 
+             :dev {:source-paths ["src"]
                    }
              })
