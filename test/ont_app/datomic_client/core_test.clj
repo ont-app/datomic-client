@@ -107,17 +107,6 @@
 
 ;; (def g (make-graph conn))
 
-
-(reset! igraph-test/eg (let []
-                         (retract-content conn)
-                         (igraph/claim (dg/make-graph conn)
-                                       igraph-test/eg-data)))
-
-(reset! igraph-test/other-eg (let []
-                               (retract-content conn)
-                               (igraph/claim (dg/make-graph conn)
-                                             igraph-test/other-eg-data)))
-
 (defn add-eg-type-schema [conn]
   (d/transact
    conn
@@ -132,31 +121,55 @@
       :db/cardinality :db.cardinality/many
       :db/doc "Toy instance-of relation"
       }
+     {:db/ident :ig-ctest/likes
+      :db/valueType :db.type/ref
+      :db/cardinality :db.cardinality/many
+      :db/doc "Toy likes relation"
+      }
      {:db/ident :ig-ctest/has-vector
-      :db/valueType :db.type/tuple
-      :db/tupleType :db.type/long
-      :db/cardinality :db.cardinality/one
-      :db/doc "Holds a vector of integers, used to test cardinality-1 utilties"
+      :db/valueType :db.type/string
+      :igraph/edn? true
+      :db/cardinality :db.cardinality/many
+      :db/doc "Stores a vector as an edn string"
       }
      ]}))
-        
-(reset! igraph-test/eg-with-types
-        (let []
-          (retract-content conn)
-          (add-eg-type-schema conn)
-          (igraph/claim (dg/make-graph conn)
-                        (glog/value-warn!
-                         ::eg-with-types-claims
-                         (normal-form
-                          (union (add (g/make-graph)
-                                      igraph-test/eg-data)
-                                 (add (g/make-graph)
-                                      igraph-test/types-data)))))))
-                         
 
-(deftest dummy-test
-  (testing "fixme"
-    (is (= 1 2))))
+
+
+(defn build-readme-graphs [conn]
+  "Side-effects: sets up eg, eg-with-types other-eg eg-for-cardinality-1 graphs in igraph-test module.
+"
+  (retract-content conn)
+  (add-eg-type-schema conn)
+  (reset! igraph-test/initial-graph (dg/make-graph conn))
+  (reset! igraph-test/eg (igraph/claim (dg/make-graph conn)
+                                       igraph-test/eg-data))
+  
+  (reset! igraph-test/eg-with-types
+          (let []
+            (igraph/claim (dg/make-graph conn)
+                          (glog/value-warn!
+                           ::eg-with-types-claims
+                           (normal-form
+                            (union (add (g/make-graph)
+                                        igraph-test/eg-data)
+                                   (add (g/make-graph)
+                                        igraph-test/types-data)))))))
+  
+  (reset! igraph-test/eg-for-cardinality-1
+          (igraph/claim (dg/make-graph conn)
+                        igraph-test/cardinality-1-appendix))
+  (retract-content conn)
+  (reset! igraph-test/other-eg (igraph/claim (dg/make-graph conn)
+                                             igraph-test/other-eg-data)))
+
+
+(deftest readme
+  (testing "igraph readme"
+    (build-readme-graphs conn)
+    (igraph-test/readme)))
+
+
 
 (comment
   (claim initial-graph [::a ::b ::c])

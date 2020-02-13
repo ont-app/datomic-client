@@ -17,9 +17,9 @@
 
 (def ontology @ont/ontology-atom)
 
-(declare graph-union)
-(declare graph-difference)
-(declare graph-intersection)
+;;(declare graph-union)
+;;(declare graph-difference)
+;;(declare graph-intersection)
 (declare get-normal-form)
 (declare get-subjects)
 (declare query-for-p-o)
@@ -70,13 +70,7 @@ Where
    {:db/ident :igraph/edn?
     :db/valueType :db.type/boolean
     :db/cardinality :db.cardinality/one
-    :db/doc "domain is string-valued properties. True if value should be read as edn."
-    }
-   {:db/ident :igraph/my-map
-    :db/valueType :db.type/string
-    :db/cardinality :db.cardinality/one
-    :igraph/edn? true
-    :db/doc "remove me"
+    :db/doc "Domain is string-valued property. True if value should be encoded and read as an edn representation of some object."
     }
    ])
 
@@ -761,6 +755,7 @@ Where
                     (int? elt) elt
                     (keyword? elt) (get-entity-id (:db g) elt)
                     :default nil))
+                
                 (affected-entity [elt]
                   (let [e (ensure-entity-id elt)]
                     (if e
