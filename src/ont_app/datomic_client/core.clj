@@ -162,9 +162,21 @@ Where
 ;; edn-encoded objects
 ;;;;;;;;;;;;;;;;;;;;;;;;
 (def edn-properties (atom {}))
+
 (defn clear-edn-properties-cache! []
+  (glog/debug! ::clearing-edn-properties-cache)
   (reset! edn-properties {})
   )
+
+(defn declare-edn-property! [db p]
+  (glog/debug! ::declaring-edn-property
+               :log/p p)
+  (swap! edn-properties
+         assoc db
+         (conj (or (@edn-properties db)
+                   #{})
+               p)))
+
 (defn edn-property? [db p]
   "Returns true iff (g `p` :igraph/edn? true) for g of `db`
 Where
@@ -172,33 +184,42 @@ Where
 Note: typically used when deciding whether to encode/decode objects as edn.
 "
   (when (not (@edn-properties db))
-    (letfn [(collect-p [sacc [p is-edn?]]
-              (if is-edn?
-                (conj sacc p)
-                sacc))
-            ]
-      (swap!  edn-properties
-              assoc db
-              (reduce collect-p
-                      (or (@edn-properties db)
-                          #{})
-                      (d/q '[:find ?p ?is-edn
-                             :where
-                             [?_p :igraph/edn? ?is-edn]
-                             [?_p :db/ident ?p]]
-                           db)))))
+    (glog/value-debug!
+     ::populating-edn-properties-cache
+     [:log/triggered-by p]
+     (letfn [(collect-p [sacc [p is-edn?]]
+               (if is-edn?
+                 (conj sacc p)
+                 sacc))
+             ]
+       (swap!  edn-properties
+               assoc db
+               (reduce collect-p
+                       (or (@edn-properties db)
+                           #{})
+                       (d/q '[:find ?p ?is-edn
+                              :where
+                              [?_p :igraph/edn? ?is-edn]
+                              [?_p :db/ident ?p]]
+                            db))))))
   ((@edn-properties db) p))
 
 (defn maybe-encode-edn [db p o]
   (if (edn-property? db p)
-    (str o)
+    (glog/value-debug!
+     ::encoding-edn
+     [:log/o o]
+     (str o))
     o))
 
 (defn maybe-read-edn [db p o]
-  (if (and (string? o)
-           (edn-property? db p))
-    (clojure.edn/read-string o)
-    o))
+   (if (and (string? o)
+            (edn-property? db p))
+     (glog/value-debug!
+      ::reading-edn
+      [:log/o o]
+      (clojure.edn/read-string o))
+     o))
 
 ;;;;;;;;;;;;;;;;;;;;
 ;; GRAPH CREATION
@@ -490,11 +511,21 @@ Where
           (maybe-new-p [s p annotations o]
             ;; Declares new properties and the types of their objects
             ;; It is expected that all objects are of the same type
+            (glog/debug! ::starting-maybe-new-p
+                         :log/s s
+                         :log/p p
+                         :log/o o
+                         :log/annotations (annotations))
             (if (empty? (g p))
-              (add annotations [[:NewProperty :has-instance p]
-                                [p
-                                 :has-value-type
-                                 (map-value-to-value-type o)]])
+              (let [value-type (map-value-to-value-type o)
+                    ]
+                (when (= value-type :edn-string)
+                  (declare-edn-property! (:db g) p))
+                (add annotations [[:NewProperty :has-instance p]
+                                  [p
+                                   :has-value-type value-type
+                                   ]]))
+              ;; else (g p) is not empty
               annotations))
 
           (ensure-db-id-tx-data [annotations o db-id]
@@ -581,16 +612,12 @@ Where
               (conj
                vacc
                (if (= value-type :edn-string)
-                 (let []
-                   (clear-edn-properties-cache!)
-                   (assoc m
-                          :db/valueType :db.type/string
-                          :igraph/edn? true)
-                   )
+                 (assoc m
+                        :db/valueType :db.type/string
+                        :igraph/edn? true)
                  ;; else it's not an edn string
                  (assoc m
                         :db/valueType value-type)))))
-
 
           (tx-data [annotations]
             (glog/value-debug!

@@ -16,8 +16,10 @@
 
 
 (def glog-config (add glog/ontology
-                      [[:glog/LogGraph :glog/level :glog/DEBUG]
+                      [[:glog/LogGraph :glog/level :glog/INFO]
                        ]))
+
+(glog/log-reset! glog-config)
 
 (def cfg {:server-type :peer-server
           :access-key (env :datomic-access-key) ;;"myaccesskey"
@@ -36,76 +38,7 @@
                       (subjects (dg/make-graph conn)))]
       (retract g [s]))))
 
-(def movie-schema [{:db/ident :movie/title
-                    :db/valueType :db.type/string
-                    :db/cardinality :db.cardinality/one
-                    :db/doc "The title of the movie"}
 
-                   {:db/ident :movie/genre
-                    :db/valueType :db.type/string
-                    :db/cardinality :db.cardinality/one
-                    :db/doc "The genre of the movie"}
-
-                   {:db/ident :movie/release-year
-                    :db/valueType :db.type/long
-                    :db/cardinality :db.cardinality/one
-                    :db/doc "The year the movie was released in theaters"}
-                   ])
-
-
-#_(defn add-schema [conn]
-  (d/transact conn {:tx-data (reduce conj dg/igraph-schema movie-schema)})
-  conn)
-
-;; (def initial-graph (make-graph (add-schema conn)))
-
-(defmethod mint-kwi :movie/Movie
-  [head-kwi & args]
-  ;; Generates unique KWI for <title> made in <year>
-  (let [{title :movie/title
-         year :movie/release-year
-         }
-        args
-        _ns (namespace head-kwi)
-        _name (name head-kwi)
-        stringify (fn [x]
-                    (cond (string? x) (str/replace x #" " "_")
-                          (keyword? x) (name x)
-                          :default (str x))) 
-        kwi (keyword _ns (str _name "_" (str/join "_"
-                                                  [(stringify title)
-                                                   (or year "NoDate")])))
-        ]
-    kwi))
-
-
-
-(defn add-movie-spec [vacc [title date genre]]
-  (conj vacc
-        [(mint-kwi :movie/Movie
-                   :movie/title title
-                   :movie/date date)
-         :movie/title title
-         :movie/release-date date
-         :movie/genre genre]))
-
-(def first-movies (reduce add-movie-spec
-                          []
-                          [["The Goonies" 1985 "action/adventure"]
-                           ["Commando" 1985 "action/adventure"]
-                           ["Repo Man" 1985 "punk dystopia"]
-                           ]))
-
-#_(defn add-data [data]
-  (d/transact conn {:tx-data data}))
-
-
-
-;; See https://docs.datomic.com/cloud/transactions/transaction-data-reference.html
-;; for complete spec on the transaction data map
-
-
-;; (def g (make-graph conn))
 
 (defn add-eg-type-schema [conn]
   (d/transact
@@ -127,13 +60,17 @@
       :db/doc "Toy likes relation"
       }
      {:db/ident :ig-ctest/has-vector
-      :db/valueType :db.type/string
-      :igraph/edn? true
-      :db/cardinality :db.cardinality/many
-      :db/doc "Stores a vector as an edn string"
+      :db/valueType :db.type/tuple
+      :db/tupleType :db.type/long 
+      ;; :db/valueType :db.type/string
+      ;; :igraph/edn? true
+      :db/cardinality :db.cardinality/one
+      :db/doc "Stores a vector of integers"
       }
      ]}))
 
+;; See https://docs.datomic.com/cloud/transactions/transaction-data-reference.html
+;; for complete spec on the transaction data map
 
 
 (defn build-readme-graphs [conn]
@@ -148,7 +85,7 @@
   (reset! igraph-test/eg-with-types
           (let []
             (igraph/claim (dg/make-graph conn)
-                          (glog/value-warn!
+                          (glog/value-debug!
                            ::eg-with-types-claims
                            (normal-form
                             (union (add (g/make-graph)
@@ -169,8 +106,95 @@
     (build-readme-graphs conn)
     (igraph-test/readme)))
 
+(defmethod mint-kwi :movie/Movie
+  [head-kwi & args]
+  ;; Generates unique KWI for <title> made in <year>
+  (let [{title :movie/title
+         year :movie/year
+         }
+        args
+        _ns (namespace head-kwi)
+        _name (name head-kwi)
+        stringify (fn [x]
+                    (cond (string? x) (str/replace x #" " "_")
+                          (keyword? x) (name x)
+                          :default (str x))) 
+        kwi (keyword _ns (str _name "_" (str/join "_"
+                                                  [(stringify title)
+                                                   (or year "NoDate")])))
+        ]
+    kwi))
+
+(deftest datomic-specific
+  (testing "schema inference"
+    ;; adding content as-yet undeclared in the schema
+    (retract-content conn)
+    (let [
+          the-goonies (mint-kwi :movie/Movie
+                                :movie/title "The Goonies"
+                                :movie/year 1985)
+          g (claim (dg/make-graph conn)
+                   [[the-goonies
+                     :movie/title "The Goonies"
+                     :movie/date 1985
+                     :movie/genre "action/adventure"
+                     ;; These next two will be stored as EDN:
+                     :movie/quarterlyEarnings [1000 2000 3000 2000]
+                     :movie/certifications {
+                                            :Argentina "Atp"
+                                            :France "Tous publics"
+                                            :UK 12
+                                            :USA "PG"
+                                            }
+                     ]])
+          ]
+      (is (= the-goonies :movie/Movie_The_Goonies_1985))
+      (is (= (unique (g the-goonies :movie/title))
+             "The Goonies"))
+      (is (= (unique (g the-goonies :movie/quarterlyEarnings))
+             [1000 2000 3000 2000]))
+      (is (= (unique (g the-goonies :movie/certifications))
+             {
+              :Argentina "Atp"
+              :France "Tous publics"
+              :UK 12
+              :USA "PG"
+              }))
+      )))
 
 
 (comment
-  (claim initial-graph [::a ::b ::c])
+
+  (def movie-schema [{:db/ident :movie/title
+                    :db/valueType :db.type/string
+                    :db/cardinality :db.cardinality/one
+                    :db/doc "The title of the movie"}
+
+                   {:db/ident :movie/genre
+                    :db/valueType :db.type/string
+                    :db/cardinality :db.cardinality/one
+                    :db/doc "The genre of the movie"}
+
+                   {:db/ident :movie/release-year
+                    :db/valueType :db.type/long
+                    :db/cardinality :db.cardinality/one
+                    :db/doc "The year the movie was released in theaters"}
+                   ])
+
+  (defn add-movie-spec [vacc [title date genre]]
+    (conj vacc
+          [(mint-kwi :movie/Movie
+                     :movie/title title
+                     :movie/date date)
+           :movie/title title
+           :movie/release-date date
+           :movie/genre genre]))
+
+  (def first-movies (reduce add-movie-spec
+                            []
+                            [["The Goonies" 1985 "action/adventure"]
+                             ["Commando" 1985 "action/adventure"]
+                             ["Repo Man" 1985 "punk dystopia"]
+                             ]))
+  
   )
