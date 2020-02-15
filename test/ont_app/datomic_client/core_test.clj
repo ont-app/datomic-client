@@ -128,6 +128,7 @@
 (deftest datomic-specific
   (testing "schema inference"
     ;; adding content as-yet undeclared in the schema
+    ;; this will be inferred and the schema updated
     (retract-content conn)
     (let [
           the-goonies (mint-kwi :movie/Movie
@@ -160,6 +161,11 @@
               :UK 12
               :USA "PG"
               }))
+      (let [g' (retract g [:movie/Movie_The_Goonies_1985
+                           :movie/quarterlyEarnings])
+            ]
+        (is (not (g' :movie/Movie_The_Goonies_1985 :movie/quarterlyEarnings))))
+      
       )))
 
 

@@ -17,9 +17,6 @@
 
 (def ontology @ont/ontology-atom)
 
-;;(declare graph-union)
-;;(declare graph-difference)
-;;(declare graph-intersection)
 (declare get-normal-form)
 (declare get-subjects)
 (declare query-for-p-o)
@@ -30,9 +27,10 @@
 
 (defrecord 
   ^{:doc "An IGraph compliant view on a Datascript graphs
-With arguments [<db>
+With arguments [<conn> & maybe <db>]
 Where
-<db> is an instance of a Datascript database.
+<conn> is a datomic connection to some client
+<db> is a DB in <conn> associated with some transaction.
 "
     }
     DatomicClient [conn db]
@@ -55,6 +53,25 @@ Where
   (claim [this to-add] (igraph/add-to-graph this to-add))
   (retract [this to-subtract] (igraph/remove-from-graph this to-subtract))
   )
+
+;;;;;;;;;;;;;;;;;;;;
+;; GRAPH CREATION
+;;;;;;;;;;;;;;;;;;;;
+(declare ensure-igraph-schema)
+
+(defn make-graph
+  "Returns an instance of DatascriptGraph for `conn` and optional `db`
+  Where
+  <conn> is a transactor, presumably initialized for domain-specific schemas
+  <db> (optional) is a db filter on `conn`, default is the db as-of the
+    current basis-t of <conn>
+  "
+  ([conn]
+   (make-graph conn
+               (d/as-of (d/db conn) (:t (d/db conn)))))
+  ([conn db]
+   (->DatomicClient (ensure-igraph-schema conn) db)))
+
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; IGRAPH SCHEMA DEFINITION AND UTILITIES
@@ -205,6 +222,7 @@ Note: typically used when deciding whether to encode/decode objects as edn.
   ((@edn-properties db) p))
 
 (defn maybe-encode-edn [db p o]
+  "Returns an EDN string for `o` if (edn-property? `p`) else `o`"
   (if (edn-property? db p)
     (glog/value-debug!
      ::encoding-edn
@@ -213,6 +231,7 @@ Note: typically used when deciding whether to encode/decode objects as edn.
     o))
 
 (defn maybe-read-edn [db p o]
+  "Returns the clojure object read from `o` if (edn-property? `p`) else `o`"
    (if (and (string? o)
             (edn-property? db p))
      (glog/value-debug!
@@ -221,29 +240,14 @@ Note: typically used when deciding whether to encode/decode objects as edn.
       (clojure.edn/read-string o))
      o))
 
-;;;;;;;;;;;;;;;;;;;;
-;; GRAPH CREATION
-;;;;;;;;;;;;;;;;;;;;
-
-  (defn make-graph
-  "Returns an instance of DatascriptGraph for `conn` and optional `db`
-  Where
-  <conn> is a transactor, presumably initialized for domain-specific schemas
-  <db> (optional) is a db filter on `conn`, default is the db as-of the
-    current basis-t of <conn>
-  "
-  ([conn]
-   (make-graph conn
-               (d/as-of (d/db conn) (:t (d/db conn)))))
-  ([conn db]
-   (->DatomicClient (ensure-igraph-schema conn) db)))
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; ORPHANS
 ;; Graph elements unconnected to other elements
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(def insignificant-attributes-atom "Caches insignificant attributes" (atom {}))
+(def insignificant-attributes-atom
+  "Caches attributes irrelevant to determining orphans"
+  (atom {}))
 
 (defn insignificant-attributes [conn]
   "Returns #{<insignificant-attribute>, ...} for <conn>
@@ -381,6 +385,9 @@ Where
 <e> is an ID in <db>
 <db> is a datomic DB
 "
+  ;; TODO: this is probably not efficient
+  ;; consider using a native igraph as an adapter
+  ;; and reduce-spo over a general query
   (letfn [(collect-descriptions [m s]
             (assoc m s (query-for-p-o db s)))
           ]
@@ -555,7 +562,7 @@ Where
               annotations))
           
           (collect-assertion [s p annotations o]
-            ;; Maps each subject to an assertion map 
+            ;; Maps each subject to a tx-data assertion map 
             (let [desc (or (unique (annotations :tx-data s))
                            {
                             :igraph/kwi s
@@ -592,6 +599,7 @@ Where
             ;;   and :igraph/kwi declaration for <s> and <o>
             ;;   plus schema declarations for new <p>
             ;;   or :igraph/edn? declaration for :edn-string's
+            ;; <db-id> a temporary string to be interned as an integer id
             ;; <value> may be <db-id> for refs or <o> otherwise
             (as-> annotations a
               (maybe-new-p s p a o)
@@ -658,7 +666,7 @@ Where
     (igraph/add-to-graph
      g
      (igraph/normal-form
-      (igraph/add (graph/make-graph) ;; use native graph as adapter
+      (igraph/add (graph/make-graph) ;; use native igraph as adapter
                   triples)))))
 
 (defmethod igraph/add-to-graph [DatomicClient :vector] [g triple]
@@ -667,14 +675,15 @@ Where
     (igraph/add-to-graph
      g
      (igraph/normal-form
-      (igraph/add (graph/make-graph) ;; use native graph as adapter
+      (igraph/add (graph/make-graph) ;; use native igraph as adapter
                   (with-meta [triple]
                     {:triples-format :vector-of-vectors}))))))
 
 (defmethod igraph/remove-from-graph [DatomicClient :vector-of-vectors]
   [g to-remove]
   (glog/debug! ::starting-remove-from-graph
-              :log/vector-of-vectors to-remove)
+               :log/vector-of-vectors to-remove)
+
   (when (not= (:t (:db g)) (:t (d/db (:conn g))))
     (glog/warn! ::DiscontinuousModification
                 :glog/message "Retracting from conn with t-basis {{log/conn-t}} from graph with t-basis {{log/g-t}}."
@@ -776,6 +785,16 @@ Where
     
     2 (let [[s p] to-remove
             affected (atom #{}) ;; possibly orphaned
+            ;; object may be edn string, so (g s p) is out...
+            objects (query g {:query '[:find ?o
+                                        :in $ % ?s ?p
+                                        :where 
+                                        (subject ?e ?s)
+                                        [?e ?p ?o]]
+                               :args [(:db g)
+                                      igraph-rules
+                                      s
+                                      p]})
             ]
         (letfn [(ensure-entity-id [elt]
                   (cond
@@ -795,10 +814,13 @@ Where
                    vacc
                    [:db/retract (affected-entity s)
                     p
-                    (or (affected-entity o) o)]))
+                    (or (affected-entity o)
+                        o)]))
                 ]
           (d/transact (:conn g)
-                      {:tx-data (reduce collect-retraction [] (g s p))})
+                      {:tx-data (reduce collect-retraction
+                                        []
+                                        (map first objects))})
           (remove-orphans (make-graph (:conn g)) @affected)))))
 
   
