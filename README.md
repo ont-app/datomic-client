@@ -21,6 +21,7 @@ Leiningen:
 ```
 
 Require as:
+
 ```
 (ns my.ns
   (:require 
@@ -188,8 +189,15 @@ attributes which are either :db/ident or :db/unique
 used relatively sparingly for large models, as they must be held
 always in memory.
 
-You may find the discussion below on the method for minting KWIs useful.
+The `entity-id` function returns the `e` for any unique ID in a given DB:
 
+```
+> (dg/entity-id (:db g) :db/cardinality)
+41
+>
+```
+
+You may find the discussion below on the method for minting KWIs useful.
 
 Properties and Attributes are approximately equivalent. They must be
 declared in the schema as :db/ident.

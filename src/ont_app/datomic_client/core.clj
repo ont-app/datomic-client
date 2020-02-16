@@ -1,5 +1,11 @@
 (ns ont-app.datomic-client.core
-  "Ports datomic.client.api to IGraph protocol with accumulate-only mutability"
+  "Ports datomic.client.api to IGraph protocol with accumulate-only mutability.
+  Defines a record DatomicClient
+  With parameters [<conn> <db>]
+  Where
+  <conn> is a datomic connection to some client
+  <db> is a DB in <conn> associated with some transaction.
+  "
   {
    :voc/mapsTo 'ont-app.datomic-client.ont
    }
@@ -15,7 +21,10 @@
    [ont-app.vocabulary.core :as voc]
    ))
 
-(def ontology @ont/ontology-atom)
+(def ontology
+  "An igraph.graph/Graph describing the various elements in
+  datomic-client. Primarily documentatry at this point. "  
+  @ont/ontology-atom)
 
 (declare get-normal-form)
 (declare get-subjects)
@@ -25,15 +34,12 @@
 (declare query-response)
 (declare datomic-query)
 
-(defrecord 
-  ^{:doc "An IGraph compliant view on a Datascript graphs
-With arguments [<conn> & maybe <db>]
-Where
-<conn> is a datomic connection to some client
-<db> is a DB in <conn> associated with some transaction.
-"
-    }
-    DatomicClient [conn db]
+(defrecord DatomicClient [conn db]
+;;     An IGraph compliant view on a Datascript graphs
+;; With parameters [<conn> <db>]
+;; Where
+;; <conn> is a datomic connection to some client
+;; <db> is a DB in <conn> associated with some transaction.
   igraph/IGraph
   (normal-form [this] (get-normal-form db))
   (subjects [this] (get-subjects db))
@@ -131,32 +137,18 @@ Where
   conn)
 
 
-(def standard-schema-subjects
-  "The set of subjects provided at time of schema creation."
-  #{:db/add :db/cardinality :db/cas :db/code :db/doc :db/ensure
-    :db/excise :db/fn :db/fulltext :db/ident :db/index :db/isComponent
-    :db/lang :db/noHistory :db/retract :db/retractEntity :db/system-tx
-    :db/tupleAttrs :db/tupleType :db/tupleTypes :db/txInstant
-    :db/unique :db/valueType :db.alter/attribute :db.attr/preds
-    :db.bootstrap/part :db.cardinality/many :db.cardinality/one
-    :db.entity/attrs :db.entity/preds :db.excise/attrs
-    :db.excise/before :db.excise/beforeT :db.fn/cas
-    :db.fn/retractEntity :db.install/attribute :db.install/function
-    :db.install/partition :db.install/valueType :db.lang/clojure
-    :db.lang/java :db.part/db :db.part/tx :db.part/user
-    :db.sys/partiallyIndexed :db.sys/reId :db.type/bigdec
-    :db.type/bigint :db.type/boolean :db.type/bytes :db.type/double
-    :db.type/float :db.type/fn :db.type/instant :db.type/keyword
-    :db.type/long :db.type/ref :db.type/string :db.type/symbol
-    :db.type/tuple :db.type/uri :db.type/uuid :db.unique/identity
-    :db.unique/value :fressian/tag :igraph/kwi})
+(def standard-schema-elements
+  "The set of elements provided at time of schema creation."
+  (set (map (fn [bmap] (:?s bmap))
+            (query ontology
+                   [[:?s :rdf/type :datomic-client/StandardSchemaElement]]
+                   ))))
 
+(def domain-element?
+  "True when a graph element is not part of the standard schema."
+  (complement standard-schema-elements))
 
-(def domain-subject?
-  "True when a subject ID is not part of the standard schema."
-  (complement standard-schema-subjects))
-
-(defn get-entity-id [db s]
+(defn entity-id [db s]
   "Returns <e> for <s> in <g>
 Where
 <e> is the entity ID (a positive integer) in (:db <g>)
@@ -178,19 +170,24 @@ Where
 ;;;;;;;;;;;;;;;;;;;;;;;;
 ;; edn-encoded objects
 ;;;;;;;;;;;;;;;;;;;;;;;;
-(def edn-properties (atom {}))
+(def edn-properties-cache
+  "Caches the set of properties which store EDN strings for a given DB.
+  {<db> #{<property>, ...}, ...}"
+  (atom {}))
 
 (defn clear-edn-properties-cache! []
+  "Side-effect: all values in edn-properties-cache are removed."
   (glog/debug! ::clearing-edn-properties-cache)
-  (reset! edn-properties {})
+  (reset! edn-properties-cache {})
   )
 
 (defn declare-edn-property! [db p]
+  "Side-effect: declares `p` as an EDN property in `db`"
   (glog/debug! ::declaring-edn-property
                :log/p p)
-  (swap! edn-properties
+  (swap! edn-properties-cache
          assoc db
-         (conj (or (@edn-properties db)
+         (conj (or (@edn-properties-cache db)
                    #{})
                p)))
 
@@ -200,7 +197,7 @@ Where
 <p> names a property in <db>
 Note: typically used when deciding whether to encode/decode objects as edn.
 "
-  (when (not (@edn-properties db))
+  (when (not (@edn-properties-cache db))
     (glog/value-debug!
      ::populating-edn-properties-cache
      [:log/triggered-by p]
@@ -209,17 +206,17 @@ Note: typically used when deciding whether to encode/decode objects as edn.
                  (conj sacc p)
                  sacc))
              ]
-       (swap!  edn-properties
+       (swap!  edn-properties-cache
                assoc db
                (reduce collect-p
-                       (or (@edn-properties db)
+                       (or (@edn-properties-cache db)
                            #{})
                        (d/q '[:find ?p ?is-edn
                               :where
                               [?_p :igraph/edn? ?is-edn]
                               [?_p :db/ident ?p]]
                             db))))))
-  ((@edn-properties db) p))
+  ((@edn-properties-cache db) p))
 
 (defn maybe-encode-edn [db p o]
   "Returns an EDN string for `o` if (edn-property? `p`) else `o`"
@@ -245,19 +242,25 @@ Note: typically used when deciding whether to encode/decode objects as edn.
 ;; Graph elements unconnected to other elements
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(def insignificant-attributes-atom
-  "Caches attributes irrelevant to determining orphans"
+(def orphan-irrelevant-attributes-cache
+  "Caches attributes irrelevant to determining orphans for some `conn`
+  {<conn> #{<attribute>, ....}}
+  "
   (atom {}))
 
-(defn insignificant-attributes [conn]
+(defn clear-orphan-irrelevant-attributes-cache! []
+  "Side-effect: removes all values in orphan-irrelevant-attributes-cache "
+  (reset! orphan-irrelevant-attributes-cache {}))
+
+(defn orphan-irrelevant-attributes [conn]
   "Returns #{<insignificant-attribute>, ...} for <conn>
 Where
 <insignificant attribute> is ignored when determining orphan-dom.
 "
-  (when (not (@insignificant-attributes-atom conn))
+  (when (not (@orphan-irrelevant-attributes-cache conn))
     (glog/value-debug!
-     ::resetting-insignificant-attributes
-     (swap! insignificant-attributes-atom
+     ::resetting-orphan-irrelevant-attributes
+     (swap! orphan-irrelevant-attributes-cache
             assoc
             conn
             (into #{}
@@ -266,10 +269,11 @@ Where
                               :where [?a :db/ident :igraph/kwi]
                               ]
                             (d/db conn)))))))
-  (@insignificant-attributes-atom conn))
+  (@orphan-irrelevant-attributes-cache conn))
     
 (defn orphaned? [db insignificant-attribute? e]
-  "Returns true iff <e> has only insiginficant attributes, and is not the subject of any triple in <conn>.
+  "Returns true iff <e> has only irrelevant attributes, and is not the
+subject of any triple in <conn>.
 "
   (empty?
    (filter
@@ -300,19 +304,20 @@ Where
   "
   ([g]
    (remove-orphans [g (subjects g)]))
+  
   ([g candidates]
-   (letfn [(ensure-entity-id [elt]
-             ;; returns the int entity id for <elt>
+   (letfn [(get-entity-id [elt]
+             ;; returns the numeric entity id for <elt>
              (if (int? elt)
                elt
-               (get-entity-id (:db g) elt)))
+               (entity-id (:db g) elt)))
            (retract-entity-clause [e]
-                        [:db/retractEntity e])
-                      ]
+             [:db/retractEntity e])
+           ]
      (let [orphans (filter (partial orphaned? (:db g)
-                                    (insignificant-attributes
+                                    (orphan-irrelevant-attributes
                                      (:conn g)))
-                           (map ensure-entity-id candidates))
+                           (map get-entity-id candidates))
                     ]
        (if (empty? orphans)
          g
@@ -341,7 +346,7 @@ Where
 <unique-id> is any <p> s.t. <p>'s datatype is a unique ID.
 "
   (filter (fn [s]
-            (query-for-p-o db s)) ;; TODO: there's probably a more efficent way
+            (query-for-p-o db s)) 
           (map first
                (d/q '[:find ?s
                       :in $ %
@@ -497,9 +502,11 @@ Maps are arity-1 and vectors are arity-2, with implicit db as 2nd arg"
     }))
 
 (defn map-value-to-value-type [value]
-  "Returns a :db.type/* for <value>
+  "Returns a :db.type/* for <value>, or :edn-string 
 Where 
-<value> is some graph element being claimed/retracted on some g"
+<value> is some graph element being claimed/retracted on some g
+:edn-string signals that <value> should be stored as an EDN string.
+"
   (or
    (@value-to-value-type-atom (type value))
    :edn-string))
@@ -548,7 +555,6 @@ Where
             ;; Declares a new db/id for new references
             (glog/debug! ::starting-maybe-new-ref
                          :log/p p
-                         :log/annotations annotations
                          :log/o o
                          :value-type (annotations p :has-value-type))
             (if (or (annotations p :has-value-type :db.type/ref)
@@ -599,7 +605,7 @@ Where
             ;;   and :igraph/kwi declaration for <s> and <o>
             ;;   plus schema declarations for new <p>
             ;;   or :igraph/edn? declaration for :edn-string's
-            ;; <db-id> a temporary string to be interned as an integer id
+            ;; <db-id> a temporary string to be encoded as an integer id
             ;; <value> may be <db-id> for refs or <o> otherwise
             (as-> annotations a
               (maybe-new-p s p a o)
@@ -697,7 +703,7 @@ Where
               elt)
             (e-for-subject [s]
               (register-affected
-               (get-entity-id db s)))
+               (entity-id db s)))
             (collect-p-o [s e vacc [p o]]
               ;; adds a retraction triple for <s> <p> <o> to <vacc>
               ;; where <s>, <p> and <o> are elements from to-remove
@@ -732,7 +738,7 @@ Where
 
             (collect-retraction [vacc v]
               ;; returns [<retract-clause>, ...]
-              ;; where <retract-clause> := [:db/retract <s-id> p <o-id-or-val>]
+              ;; where <retract-clause> := [:db/retract <s-id> <p> <o-id-or-val>]
               ;; <v> := [<s> <p> <o> & maybe <p>, <o>, ...]
               (let [e (e-for-subject (first v))
                     retract-clause (reduce
@@ -781,7 +787,7 @@ Where
             
             ]
         (d/transact (:conn g)
-                    {:tx-data [[:db/retractEntity (get-entity-id (:db g) s)]]}))
+                    {:tx-data [[:db/retractEntity (entity-id (:db g) s)]]}))
     
     2 (let [[s p] to-remove
             affected (atom #{}) ;; possibly orphaned
@@ -796,14 +802,14 @@ Where
                                       s
                                       p]})
             ]
-        (letfn [(ensure-entity-id [elt]
+        (letfn [(get-entity-id [elt]
                   (cond
                     (int? elt) elt
-                    (keyword? elt) (get-entity-id (:db g) elt)
+                    (keyword? elt) (entity-id (:db g) elt)
                     :default nil))
                 
                 (affected-entity [elt]
-                  (let [e (ensure-entity-id elt)]
+                  (let [e (get-entity-id elt)]
                     (if e
                       (let []
                         (swap! affected conj e)
@@ -822,39 +828,4 @@ Where
                                         []
                                         (map first objects))})
           (remove-orphans (make-graph (:conn g)) @affected)))))
-
-  
-;; SET OPERATIONS
-#_(defn graph-union [g1 g2]
-  "Returns union of <g1> and <g2> using same schema as <g1>
-This uses igraph.graph/Graph as scratch, and probably won't scale.
-TODO:Redo when you have data to develop for scale.
-"
-  #_(igraph/add (make-graph (merge (:schema (:db g1))
-                                 (:schema (:db g2))))
-       (igraph/normal-form (igraph/union
-                            (igraph/add (graph/make-graph) (g1))
-                            (igraph/add (graph/make-graph) (g2))))))
-
-#_(defn graph-difference [g1 g2]
-  "This uses igraph.graph/Graph as scratch, and probably won't scale.
-TODO:Redo when you have data to develop for scale.
-"
-  #_(igraph/add (make-graph (:schema (:db g1)))
-              (igraph/normal-form
-               (igraph/difference
-                (igraph/add (graph/make-graph) (g1))
-                (igraph/add (graph/make-graph) (g2))))))
-
-#_(defn graph-intersection [g1 g2]
-  "This uses igraph.graph/Graph as scratch, and probably won't scale.
-TODO:Redo when you have data to develop for scale.
-"
-  #_(igraph/add (make-graph (:schema (:db g1)))
-              (igraph/normal-form
-               (igraph/intersection
-                (igraph/add (graph/make-graph) (g1))
-                (igraph/add (graph/make-graph) (g2))))))
-
-
 

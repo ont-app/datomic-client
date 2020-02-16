@@ -110,9 +110,8 @@
   [head-kwi & args]
   ;; Generates unique KWI for <title> made in <year>
   (let [{title :movie/title
-         year :movie/year
-         }
-        args
+         year :movie/year } args
+        _ (assert title)
         _ns (namespace head-kwi)
         _name (name head-kwi)
         stringify (fn [x]
@@ -128,7 +127,7 @@
 (deftest datomic-specific
   (testing "schema inference"
     ;; adding content as-yet undeclared in the schema
-    ;; this will be inferred and the schema updated
+    ;; schema will be inferred and asserted
     (retract-content conn)
     (let [
           the-goonies (mint-kwi :movie/Movie
@@ -170,11 +169,13 @@
 
 
 (comment
-
+  ;; left over from playing around during devel.
+  ;; Taken from examples in the doc.
+  
   (def movie-schema [{:db/ident :movie/title
-                    :db/valueType :db.type/string
-                    :db/cardinality :db.cardinality/one
-                    :db/doc "The title of the movie"}
+                      :db/valueType :db.type/string
+                      :db/cardinality :db.cardinality/one
+                      :db/doc "The title of the movie"}
 
                    {:db/ident :movie/genre
                     :db/valueType :db.type/string
