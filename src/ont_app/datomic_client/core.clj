@@ -306,6 +306,9 @@ subject of any triple in <conn>.
    (remove-orphans [g (subjects g)]))
   
   ([g candidates]
+   (glog/log! ::starting-remove-orphans
+              :log/candidates)
+   #dbg
    (letfn [(get-entity-id [elt]
              ;; returns the numeric entity id for <elt>
              (if (int? elt)
@@ -685,6 +688,49 @@ Where
                   (with-meta [triple]
                     {:triples-format :vector-of-vectors}))))))
 
+(defn retract-clauses-for-underspecified-triple [affected-entity-fn g to-remove]
+  "Returns [<retraction-clause>, ...] for `to-remove` from `db`
+Where
+<retraction-clause> := [<op> <elt> ...]
+<g> is a 
+<op> is in #{:db/retract :db/retractEntity}
+<elt> is an element of <g>
+<affected-entity-fn> := fn [elt] -> <entity-id>, typically with the side-effect 
+  of registering a possible orphan in the calling function.
+<entity-id> is the numeric id of <elt> in <g>
+"
+  [g to-remove]
+  ;; underspecified triple is [s] or [s p]
+  (case (count to-remove)
+    1 (let [[s] to-remove
+            
+            ]
+        [[:db/retractEntity (entity-id (:db g) s)]])
+    
+    2 (let [[s p] to-remove
+            objects (query g {:query '[:find ?o
+                                        :in $ % ?s ?p
+                                        :where 
+                                        (subject ?e ?s)
+                                        [?e ?p ?o]]
+                               :args [(:db g)
+                                      igraph-rules
+                                      s
+                                      p]})
+            ]
+        (letfn [
+                (collect-retraction [vacc o]
+                  (conj
+                   vacc
+                   [:db/retract (affected-entity-fn s)
+                    p
+                    (or (affected-entity-fn o)
+                        o)]))
+                ]
+          (reduce collect-retraction
+                  []
+                  (map first objects))))))
+
 (defmethod igraph/remove-from-graph [DatomicClient :vector-of-vectors]
   [g to-remove]
   (glog/debug! ::starting-remove-from-graph
@@ -735,20 +781,32 @@ Where
                     vacc)
                   ;; else there's an _o
                   (reduce conj vacc [p _o]))))
-
+            
+            (collect-underspecified-retractions [vacc v]
+              ;; collects retraction clauses for underspecified triples
+              (reduce conj
+                      vacc
+                      (retract-clauses-for-underspecified-triple
+                       e-for-subject
+                       g
+                       v)))
+                      
             (collect-retraction [vacc v]
               ;; returns [<retract-clause>, ...]
               ;; where <retract-clause> := [:db/retract <s-id> <p> <o-id-or-val>]
               ;; <v> := [<s> <p> <o> & maybe <p>, <o>, ...]
-              (let [e (e-for-subject (first v))
-                    retract-clause (reduce
-                                    (partial collect-p-o (first v) e)
-                                    [:db/retract e]
-                                    (partition 2 (rest v)))
-                    ]
-                (if (> (count retract-clause) 3)
-                  (conj vacc retract-clause)
-                  vacc)))
+              (if (> (count v) 2)
+                (let [e (e-for-subject (first v))
+                      retract-clause (reduce
+                                      (partial collect-p-o (first v) e)
+                                      [:db/retract e]
+                                      (partition 2 (rest v)))
+                      ]
+                  (if (> (count retract-clause) 3)
+                    (conj vacc retract-clause)
+                    vacc))
+                ;; else v is underspecified
+                (collect-underspecified-retractions vacc v)))
 
 
             ] ;; letfn
@@ -779,7 +837,75 @@ Where
                                     :contents to-remove))
        {:triples-format :vector-of-vectors}))))
 
+
 (defmethod igraph/remove-from-graph [DatomicClient :underspecified-triple]
+  [g to-remove]
+  ;; underspecified triple is [s] or [s p]
+  (let [affected (atom #{})
+        ]
+    (letfn [(register-affected [elt]
+              (swap! affected conj elt)
+              elt)
+            (e-for-subject [s]
+              (register-affected
+               (entity-id (:db g) s)))
+            ]
+      (d/transact (:conn g)
+                  {:tx-data (retract-clauses-for-underspecified-triple
+                             e-for-subject
+                             g
+                             to-remove)
+                   })
+      (remove-orphans (make-graph (:conn g)) @affected))))
+
+#_(case (count to-remove)
+    1 (let [[s] to-remove
+            
+            ]
+        (d/transact (:conn g)
+                    {:tx-data [[:db/retractEntity (entity-id (:db g) s)]]}))
+    
+    2 (let [[s p] to-remove
+            affected (atom #{}) ;; possibly orphaned
+            ;; object may be edn string, so (g s p) is out...
+            objects (query g {:query '[:find ?o
+                                        :in $ % ?s ?p
+                                        :where 
+                                        (subject ?e ?s)
+                                        [?e ?p ?o]]
+                               :args [(:db g)
+                                      igraph-rules
+                                      s
+                                      p]})
+            ]
+        (letfn [(get-entity-id [elt]
+                  (cond
+                    (int? elt) elt
+                    (keyword? elt) (entity-id (:db g) elt)
+                    :default nil))
+                
+                (affected-entity [elt]
+                  (let [e (get-entity-id elt)]
+                    (if e
+                      (let []
+                        (swap! affected conj e)
+                        e))))
+                  
+                (collect-retraction [vacc o]
+                  (conj
+                   vacc
+                   [:db/retract (affected-entity s)
+                    p
+                    (or (affected-entity o)
+                        o)]))
+                ]
+          (d/transact (:conn g)
+                      {:tx-data (reduce collect-retraction
+                                        []
+                                        (map first objects))})
+          (remove-orphans (make-graph (:conn g)) @affected))))
+
+#_(defmethod igraph/remove-from-graph [DatomicClient :underspecified-triple]
   [g to-remove]
   ;; underspecified triple is [s] or [s p]
   (case (count to-remove)
@@ -828,4 +954,3 @@ Where
                                         []
                                         (map first objects))})
           (remove-orphans (make-graph (:conn g)) @affected)))))
-
