@@ -8,6 +8,7 @@
    ;; ont-app
    [ont-app.datomic-client.core :as dg :refer :all]
    [ont-app.graph-log.core :as glog]
+   [ont-app.graph-log.levels :refer :all]
    [ont-app.igraph.core :as igraph :refer :all]
    [ont-app.igraph.core-test :as igraph-test]
    [ont-app.igraph.graph :as g]
@@ -29,7 +30,29 @@
           :validate-hostnames false})
 
 (def client (d/client cfg))
-(def conn (d/connect client {:db-name "hello"}))
+
+(def conn (atom nil))
+(defn get-conn []
+  (when (not @conn) 
+    (try (reset! conn
+                 (d/connect client {:db-name (env :datomic-db-name)
+                                    :timeout 1000
+                                    }))
+         (catch Throwable e
+           (print "Could not connect to Datomic server.\n")
+           (clojure.pprint/pprint
+            (merge
+             (ex-data e)
+             {
+              ::cfg cfg
+              ::db-name (env :datomic-db-name)
+              ::client client
+              }))
+           (reset! conn :no-connection))))
+
+  (if (not (= @conn :no-connection))
+    @conn))
+                 
 
 (defn retract-content [conn]
   "Retracts all non-schema content from the db at head of `conn`."
@@ -85,7 +108,7 @@
   (reset! igraph-test/eg-with-types
           (let []
             (igraph/claim (dg/make-graph conn)
-                          (glog/value-debug!
+                          (value-debug
                            ::eg-with-types-claims
                            (normal-form
                             (union (add (g/make-graph)
@@ -102,9 +125,10 @@
 
 
 (deftest readme
-  (testing "igraph readme"
-    (build-readme-graphs conn)
-    (igraph-test/readme)))
+  (when-let [conn (get-conn)]
+    (testing "igraph readme"
+      (build-readme-graphs conn)
+      (igraph-test/readme))))
 
 (defmethod mint-kwi :movie/Movie
   [head-kwi & args]
@@ -125,47 +149,48 @@
     kwi))
 
 (deftest datomic-specific
-  (testing "schema inference"
-    ;; adding content as-yet undeclared in the schema
-    ;; schema will be inferred and asserted
-    (retract-content conn)
-    (let [
-          the-goonies (mint-kwi :movie/Movie
-                                :movie/title "The Goonies"
-                                :movie/year 1985)
-          g (claim (dg/make-graph conn)
-                   [[the-goonies
-                     :movie/title "The Goonies"
-                     :movie/date 1985
-                     :movie/genre "action/adventure"
-                     ;; These next two will be stored as EDN:
-                     :movie/quarterlyEarnings [1000 2000 3000 2000]
-                     :movie/certifications {
-                                            :Argentina "Atp"
-                                            :France "Tous publics"
-                                            :UK 12
-                                            :USA "PG"
-                                            }
-                     ]])
-          ]
-      (is (= the-goonies :movie/Movie_The_Goonies_1985))
-      (is (= (unique (g the-goonies :movie/title))
-             "The Goonies"))
-      (is (= (unique (g the-goonies :movie/quarterlyEarnings))
-             [1000 2000 3000 2000]))
-      (is (= (unique (g the-goonies :movie/certifications))
-             {
-              :Argentina "Atp"
-              :France "Tous publics"
-              :UK 12
-              :USA "PG"
-              }))
-      (let [g' (retract g [:movie/Movie_The_Goonies_1985
-                           :movie/quarterlyEarnings])
+  (when-let [conn (get-conn)]
+    (testing "schema inference"
+      ;; adding content as-yet undeclared in the schema
+      ;; schema will be inferred and asserted
+      (retract-content conn)
+      (let [
+            the-goonies (mint-kwi :movie/Movie
+                                  :movie/title "The Goonies"
+                                  :movie/year 1985)
+            g (claim (dg/make-graph conn)
+                     [[the-goonies
+                       :movie/title "The Goonies"
+                       :movie/date 1985
+                       :movie/genre "action/adventure"
+                       ;; These next two will be stored as EDN:
+                       :movie/quarterlyEarnings [1000 2000 3000 2000]
+                       :movie/certifications {
+                                              :Argentina "Atp"
+                                              :France "Tous publics"
+                                              :UK 12
+                                              :USA "PG"
+                                              }
+                       ]])
             ]
-        (is (not (g' :movie/Movie_The_Goonies_1985 :movie/quarterlyEarnings))))
-      
-      )))
+        (is (= the-goonies :movie/Movie_The_Goonies_1985))
+        (is (= (unique (g the-goonies :movie/title))
+               "The Goonies"))
+        (is (= (unique (g the-goonies :movie/quarterlyEarnings))
+               [1000 2000 3000 2000]))
+        (is (= (unique (g the-goonies :movie/certifications))
+               {
+                :Argentina "Atp"
+                :France "Tous publics"
+                :UK 12
+                :USA "PG"
+                }))
+        (let [g' (retract g [:movie/Movie_The_Goonies_1985
+                             :movie/quarterlyEarnings])
+              ]
+          (is (not (g' :movie/Movie_The_Goonies_1985 :movie/quarterlyEarnings))))
+        
+        ))))
 
 
 (comment

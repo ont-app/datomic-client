@@ -16,6 +16,7 @@
    ;; ont-app
    [ont-app.datomic-client.ont :as ont]
    [ont-app.graph-log.core :as glog]
+   [ont-app.graph-log.levels :refer :all]
    [ont-app.igraph.core :as igraph :refer :all]
    [ont-app.igraph.graph :as graph]
    [ont-app.vocabulary.core :as voc]
@@ -35,11 +36,7 @@
 (declare datomic-query)
 
 (defrecord DatomicClient [conn db]
-;;     An IGraph compliant view on a Datascript graphs
-;; With parameters [<conn> <db>]
-;; Where
-;; <conn> is a datomic connection to some client
-;; <db> is a DB in <conn> associated with some transaction.
+  ;; see ns docstring for description
   igraph/IGraph
   (normal-form [this] (get-normal-form db))
   (subjects [this] (get-subjects db))
@@ -65,7 +62,7 @@
 ;;;;;;;;;;;;;;;;;;;;
 (declare ensure-igraph-schema)
 
-(defn make-graph
+(defn ^DatomicClient make-graph
   "Returns an instance of DatascriptGraph for `conn` and optional `db`
   Where
   <conn> is a transactor, presumably initialized for domain-specific schemas
@@ -78,6 +75,7 @@
   ([conn db]
    (->DatomicClient (ensure-igraph-schema conn) db)))
 
+;; TODO consider defining print-method
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; IGRAPH SCHEMA DEFINITION AND UTILITIES
@@ -148,16 +146,18 @@ Where
   "True when a graph element is not part of the standard schema."
   (complement standard-schema-elements))
 
-(defn entity-id [db s]
-  "Returns <e> for <s> in <g>
+(defn entity-id 
+  "Returns <e> for <s> in <db>
 Where
 <e> is the entity ID (a positive integer) in (:db <g>)
 <s> is a subject s.t. [<e> ::id <s>] in (:db <g>)
 <g> is an instance of DatascriptGraph
 "
-  (glog/value-debug!
-   ::entity-id
-   [:log/s s]
+  [db s]
+  {:pre [(keyword? s)]
+   }
+  (value-debug
+   :entity-id [:log/s s]
    (igraph/unique
     (map first (d/q '[:find ?e
                       :in $ % ?s
@@ -165,7 +165,7 @@ Where
                       ]
                     db
                     igraph-rules
-                   s)))))
+                    s)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;
 ;; edn-encoded objects
@@ -177,28 +177,34 @@ Where
 
 (defn clear-edn-properties-cache! []
   "Side-effect: all values in edn-properties-cache are removed."
-  (glog/debug! ::clearing-edn-properties-cache)
+  (debug ::clearing-edn-properties-cache)
   (reset! edn-properties-cache {})
   )
 
-(defn declare-edn-property! [db p]
+(defn declare-edn-property! 
   "Side-effect: declares `p` as an EDN property in `db`"
-  (glog/debug! ::declaring-edn-property
-               :log/p p)
+  [db p]
+  {:pre [(keyword? p)
+         (or (debug ::declaring-edn-property
+                          :log/p p)
+             true)
+         ]
+   }
   (swap! edn-properties-cache
          assoc db
          (conj (or (@edn-properties-cache db)
                    #{})
                p)))
 
-(defn edn-property? [db p]
+(defn edn-property? 
   "Returns true iff (g `p` :igraph/edn? true) for g of `db`
 Where
 <p> names a property in <db>
 Note: typically used when deciding whether to encode/decode objects as edn.
 "
+  [db p]
   (when (not (@edn-properties-cache db))
-    (glog/value-debug!
+    (value-debug
      ::populating-edn-properties-cache
      [:log/triggered-by p]
      (letfn [(collect-p [sacc [p is-edn?]]
@@ -218,24 +224,26 @@ Note: typically used when deciding whether to encode/decode objects as edn.
                             db))))))
   ((@edn-properties-cache db) p))
 
-(defn maybe-encode-edn [db p o]
+(defn maybe-encode-edn
   "Returns an EDN string for `o` if (edn-property? `p`) else `o`"
+  [db p o]
   (if (edn-property? db p)
-    (glog/value-debug!
+    (value-debug
      ::encoding-edn
      [:log/o o]
      (str o))
     o))
 
-(defn maybe-read-edn [db p o]
+(defn maybe-read-edn 
   "Returns the clojure object read from `o` if (edn-property? `p`) else `o`"
+  [db p o]
+  (value-debug
+   ::reading-edn
+   [:log/o o]
    (if (and (string? o)
             (edn-property? db p))
-     (glog/value-debug!
-      ::reading-edn
-      [:log/o o]
-      (clojure.edn/read-string o))
-     o))
+     (clojure.edn/read-string o)
+     o)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; ORPHANS
@@ -248,17 +256,19 @@ Note: typically used when deciding whether to encode/decode objects as edn.
   "
   (atom {}))
 
-(defn clear-orphan-irrelevant-attributes-cache! []
+(defn clear-orphan-irrelevant-attributes-cache! 
   "Side-effect: removes all values in orphan-irrelevant-attributes-cache "
+  []
   (reset! orphan-irrelevant-attributes-cache {}))
 
-(defn orphan-irrelevant-attributes [conn]
+(defn orphan-irrelevant-attributes 
   "Returns #{<insignificant-attribute>, ...} for <conn>
 Where
 <insignificant attribute> is ignored when determining orphan-dom.
 "
+  [conn]
   (when (not (@orphan-irrelevant-attributes-cache conn))
-    (glog/value-debug!
+    (value-debug
      ::resetting-orphan-irrelevant-attributes
      (swap! orphan-irrelevant-attributes-cache
             assoc
@@ -272,16 +282,22 @@ Where
   (@orphan-irrelevant-attributes-cache conn))
     
 (defn orphaned? [db insignificant-attribute? e]
+  {:pre [(not (nil? e))
+         (or (debug ::starting-orphaned?
+                          :log/e e)
+               true)]
+   }
   "Returns true iff <e> has only irrelevant attributes, and is not the
 subject of any triple in <conn>.
 "
+
   (empty?
    (filter
     (complement insignificant-attribute?)
-    (glog/value-debug!
+    (value-debug
      ::attributes-in-orphaned
      (map first
-          (glog/value-debug!
+          (value-debug
            ::query-for-attributes
            (d/q '[:find ?a
                   :in $ ?e
@@ -306,9 +322,6 @@ subject of any triple in <conn>.
    (remove-orphans [g (subjects g)]))
   
   ([g candidates]
-   (glog/log! ::starting-remove-orphans
-              :log/candidates)
-   #dbg
    (letfn [(get-entity-id [elt]
              ;; returns the numeric entity id for <elt>
              (if (int? elt)
@@ -329,7 +342,7 @@ subject of any triple in <conn>.
            (d/transact
             (:conn g)
             {:tx-data
-             (glog/value-debug!
+             (value-debug
               ::orphans-tx-data
               (into []
                     (map retract-entity-clause orphans)))})
@@ -339,7 +352,7 @@ subject of any triple in <conn>.
 ;; MEMBER ACCESS
 ;;;;;;;;;;;;;;;;;;;;
 
-(defn get-subjects [db]
+(defn get-subjects 
   "Returns (<s>, ...) for <db>, a lazy seq
 Where
 <s> is a unique identifier for some <e>
@@ -348,6 +361,7 @@ Where
 <e> is an entity-id
 <unique-id> is any <p> s.t. <p>'s datatype is a unique ID.
 "
+  [db]
   (filter (fn [s]
             (query-for-p-o db s)) 
           (map first
@@ -359,11 +373,12 @@ Where
                     db igraph-rules))))
 
 
-(defn query-for-p-o [db s]
+(defn query-for-p-o 
   "Returns <desc> for <s> in <db>
 Where
 <desc> := {<p> #{<o>, ...}, ...}
 "
+  [db s]
   (letfn [(collect-desc [desc [p o]]
             (if (= p :igraph/kwi)
               desc
@@ -386,13 +401,14 @@ Where
       (if (not (empty? desc))
         desc))))
 
-(defn get-normal-form [db]
+(defn get-normal-form 
   "Returns {<s> {<p> #{<o>, ...}, ...}, ...} for all <s> in `db`
 Where
 <e> :igraph/kwi <s>
 <e> is an ID in <db>
 <db> is a datomic DB
 "
+  [db]
   ;; TODO: this is probably not efficient
   ;; consider using a native igraph as an adapter
   ;; and reduce-spo over a general query
@@ -403,7 +419,7 @@ Where
             {}
             (get-subjects db))))
 
-(defn query-for-o [db s p]
+(defn query-for-o 
   "Returns #{<o>, ...} for `s` and `p` in `db`
 Where
 <o> is a value for <db> s.t. <s> <p>  <o> 
@@ -411,6 +427,7 @@ Where
 <p> is a predicate with schema definition in <db>
 <db> is a datomic DB
 "
+  [db s p]
   (try
     (let [os
           (reduce conj
@@ -433,10 +450,15 @@ Where
       (let [ed (ex-data e)]
         (if (= (:db/error ed) :db.error/not-an-entity)
           nil
-          (throw e))))))
+          (throw (ex-info "Query error in query-for-o"
+                          (merge (ex-data e)
+                                 ::db db
+                                 ::s s
+                                 ::p p)e)))))))
 
-(defn ask-s-p-o [db s p o]
+(defn ask-s-p-o 
   "Returns true iff s-p-o is a triple in <db>"
+  [db s p o]
   (not (empty?
         (try 
           (d/q '[:find ?e
@@ -452,16 +474,22 @@ Where
             (let [ed (ex-data e)]
               (if (= (:db/error ed) :db.error/not-an-entity)
                 nil
-                (throw e))))))))
+                (throw (ex-info "Query error in ask-s-p-o"
+                                (merge (ex-data e)
+                                       ::db db
+                                       ::s s
+                                       ::p p
+                                       ::o o))))))))))
 
 ;;;;;;;;;;;;
 ;; Querying
 ;;;;;;;;;;;;
-(defn query-arity [q]
+(defn query-arity 
   "Returns either :arity-1 or :arity-2 depending on the type of `q`
 Where
 <q> is a query posed to a datomic db.
 Maps are arity-1 and vectors are arity-2, with implicit db as 2nd arg"
+  [q]
   (cond
     (map? q) :arity-1
     (vector? q) :arity-2))
@@ -504,22 +532,23 @@ Maps are arity-1 and vectors are arity-2, with implicit db as 2nd arg"
     ;; clojure container classes not listed here.
     }))
 
-(defn map-value-to-value-type [value]
+(defn map-value-to-value-type 
   "Returns a :db.type/* for <value>, or :edn-string 
 Where 
 <value> is some graph element being claimed/retracted on some g
 :edn-string signals that <value> should be stored as an EDN string.
 "
+  [value]
   (or
    (@value-to-value-type-atom (type value))
    :edn-string))
 
 (defmethod igraph/add-to-graph [DatomicClient :normal-form]
   [g triples]
-  (glog/debug! ::starting-add-to-graph
+  (debug ::starting-add-to-graph
               :log/normal-form triples)
   (when (not= (:t (:db g)) (:t (d/db (:conn g))))
-    (glog/warn! ::DiscontinuousModification
+    (warn ::DiscontinuousModification
                 :glog/message "Adding to conn with t-basis {{log/conn-t}} from graph with t-basis {{log/g-t}}."
                 :log/g-t (:t (:db g))
                 :log/conn-t (:t (d/db (:conn g)))))
@@ -528,7 +557,7 @@ Where
           (maybe-new-p [s p annotations o]
             ;; Declares new properties and the types of their objects
             ;; It is expected that all objects are of the same type
-            (glog/debug! ::starting-maybe-new-p
+            (debug ::starting-maybe-new-p
                          :log/s s
                          :log/p p
                          :log/o o
@@ -556,7 +585,7 @@ Where
                                                              :igraph/kwi o)))))
           (maybe-new-ref [p annotations o]
             ;; Declares a new db/id for new references
-            (glog/debug! ::starting-maybe-new-ref
+            (debug ::starting-maybe-new-ref
                          :log/p p
                          :log/o o
                          :value-type (annotations p :has-value-type))
@@ -578,7 +607,7 @@ Where
                             })
                   ]
               (assert-unique annotations
-                             :tx-data s (glog/value-debug!
+                             :tx-data s (value-debug
                                          :adding-annotation
                                          [:log/s s
                                           :log/o o]
@@ -637,7 +666,7 @@ Where
                         :db/valueType value-type)))))
 
           (tx-data [annotations]
-            (glog/value-debug!
+            (value-debug
              ::tx-data-in-add-to-graph
              [:log/annotations (igraph/normal-form annotations)]
              (reduce conj
@@ -656,7 +685,7 @@ Where
         ;; There are new properties to declare in the schema
         (d/transact (:conn g)
                     {:tx-data
-                     (glog/value-debug!
+                     (value-debug
                       ::schema-update-tx-data
                       (reduce
                        (partial collect-schema-tx-data annotations)
@@ -688,7 +717,7 @@ Where
                   (with-meta [triple]
                     {:triples-format :vector-of-vectors}))))))
 
-(defn retract-clauses-for-underspecified-triple [affected-entity-fn g to-remove]
+(defn retract-clauses-for-underspecified-triple 
   "Returns [<retraction-clause>, ...] for `to-remove` from `db`
 Where
 <retraction-clause> := [<op> <elt> ...]
@@ -699,12 +728,15 @@ Where
   of registering a possible orphan in the calling function.
 <entity-id> is the numeric id of <elt> in <g>
 "
-  [g to-remove]
+
+  [affected-entity-fn g to-remove]
   ;; underspecified triple is [s] or [s p]
+  
   (case (count to-remove)
     1 (let [[s] to-remove
             
             ]
+        (assert (keyword? s))
         [[:db/retractEntity (entity-id (:db g) s)]])
     
     2 (let [[s p] to-remove
@@ -724,7 +756,8 @@ Where
                    vacc
                    [:db/retract (affected-entity-fn s)
                     p
-                    (or (affected-entity-fn o)
+                    (or (and (keyword? o)
+                             (affected-entity-fn o))
                         o)]))
                 ]
           (reduce collect-retraction
@@ -733,32 +766,33 @@ Where
 
 (defmethod igraph/remove-from-graph [DatomicClient :vector-of-vectors]
   [g to-remove]
-  (glog/debug! ::starting-remove-from-graph
+  (debug ::starting-remove-from-graph
                :log/vector-of-vectors to-remove)
 
   (when (not= (:t (:db g)) (:t (d/db (:conn g))))
-    (glog/warn! ::DiscontinuousModification
+    (warn ::DiscontinuousModification
                 :glog/message "Retracting from conn with t-basis {{log/conn-t}} from graph with t-basis {{log/g-t}}."
                 :log/g-t (:t (:db g))
                 :log/conn-t (:t (d/db (:conn g)))))
   (let [db (d/db (:conn g))
         affected (atom #{}) ;; elements which may be orphaned
         ]
-    (letfn [(register-affected [elt]
-              (swap! affected conj elt)
-              elt)
-            (e-for-subject [s]
-              (register-affected
-               (entity-id db s)))
+    (letfn [(register-affected [e]
+              (swap! affected conj e)
+              e)
+            (e-for-elt [elt]
+              (if-let [e (entity-id db elt)]
+                (register-affected e)
+                elt))
             (collect-p-o [s e vacc [p o]]
               ;; adds a retraction triple for <s> <p> <o> to <vacc>
               ;; where <s>, <p> and <o> are elements from to-remove
               ;; <e> is the ID of <s>
-              (glog/debug! ::starting-collect-p-o
-                           :log/s s
-                           :log/p p
-                           :log/o o
-                           :log/e e)
+              (debug ::starting-collect-p-o
+                     :log/s s
+                     :log/p p
+                     :log/o o
+                     :log/e e)
               (let [_o (ffirst (d/q '[:find ?o
                                       :in $ ?e ?p ?o
                                       :where [?e ?p ?o]
@@ -768,12 +802,12 @@ Where
                                     p
                                     (if (keyword? o)
                                       ;;... TODO check p schema for ref
-                                      (e-for-subject o)
+                                      (e-for-elt o)
                                       o)))
                     ]
                 (if (not _o)
                   (let []
-                    (glog/warn! ::no-object-found-to-retract
+                    (warn ::no-object-found-to-retract
                                 :glog/message "No object '{{log/o}}' found to retract in [:db/retract {{log/s}} {{log/p}} {{log/o}}. Skipping."
                                 :log/s s
                                 :log/p p
@@ -787,7 +821,7 @@ Where
               (reduce conj
                       vacc
                       (retract-clauses-for-underspecified-triple
-                       e-for-subject
+                       e-for-elt
                        g
                        v)))
                       
@@ -796,7 +830,7 @@ Where
               ;; where <retract-clause> := [:db/retract <s-id> <p> <o-id-or-val>]
               ;; <v> := [<s> <p> <o> & maybe <p>, <o>, ...]
               (if (> (count v) 2)
-                (let [e (e-for-subject (first v))
+                (let [e (e-for-elt (first v))
                       retract-clause (reduce
                                       (partial collect-p-o (first v) e)
                                       [:db/retract e]
@@ -852,7 +886,7 @@ Where
             ]
       (d/transact (:conn g)
                   {:tx-data (retract-clauses-for-underspecified-triple
-                             e-for-subject
+                             e-for-subject ;; also populates @affected
                              g
                              to-remove)
                    })

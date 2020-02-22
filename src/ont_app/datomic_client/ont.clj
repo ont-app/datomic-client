@@ -14,7 +14,8 @@
 
 (def ontology-atom
   "An igraph.graph/Graph describing the various elements in
-  datomic-client. Primarily documentatry at this point. "
+  datomic-client. Primarily documentatry at this point, though it does
+  inform the domain-element? function "
   (atom (make-graph)))
 
 (defn update-ontology! [to-add]
@@ -36,11 +37,15 @@ schema. These should be documented at https://docs.datomic.com/"
 
 (update-ontology! ;; IGraph-specific stuff
  [
-  [:igraph/kwi :rdf/type :datomic-client/Attribute
+  [:igraph/kwi
+   :rdf/type :datomic-client/Attribute
+   :rdf/type :datomic-client/StandardSchemaElement
    :rdfs/comment
    "Asserts that <entity> has keyword <kwi> as a unique identifier."
    ]
-  [:igraph/edn? :rdf/type :datomic-client/Attribute
+  [:igraph/edn?
+   :rdf/type :datomic-client/Attribute
+   :rdf/type :datomic-client/StandardSchemaElement
    :rdfs/comment
    "Asserts that the entity is an attribute whose value is stored as an EDN 
 string, and should be encoded/read accordingly."

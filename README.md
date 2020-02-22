@@ -4,11 +4,27 @@ The project ports the Datomic Client to the IGraph protocols.
 
 Part of the ont-app library, dedicated to Ontology-driven development.
 
-<a name="h2-usage"></a>
-## Usage
+## Contents
+- [Dependencies](#h2-dependencies)
+- [Connecting to the Datomic database](#h2-connecting-to-a-datomic-database)
+- [Creating a graph](#h2-creating-a-graph)
+- [Member access](#h2-member-access)
+  - [S-P-O vs E-A-V](#h3-spo-vs-eav)
+    - [Minting KWSs](#h4-minting-kwis)
+  - [Querying](#h3-querying)
+  - [Other utilities](#h3-other-utilities)
+- [Adding and removing members](#h2-adding-and-removing-members)
+  - [Adding with 'claim'](#h3-adding-with-claim)
+  - [Removing with `retract`](#h3-removing-with-retract)
+- [Testing](#h2-testing)
+
+
+<a name="h2-dependencies"></a>
+## Dependencies
 
 Follow the [getting started guide for
-Datomic](https://docs.datomic.com/on-prem/get-datomic.html).
+Datomic](https://docs.datomic.com/on-prem/get-datomic.html). To get a
+datomic service up and running.
 
 Leiningen:
 
@@ -33,8 +49,8 @@ Require as:
     )
 ```
 
-<a name="h3-connecting-to-a-datomic-database"></a>
-### Connecting to the Datomic database
+<a name="h2-connecting-to-a-datomic-database"></a>
+## Connecting to the Datomic database
 
 See the [Datomic docs on connecting to a
 database](https://docs.datomic.com/on-prem/getting-started/connect-to-a-database.html). This
@@ -62,8 +78,8 @@ datomic connection per the Datomic instructions:
 
 ```
 
-<a name="h3-creating-a-graph"></a>
-### Creating a graph
+<a name="h2-creating-a-graph"></a>
+## Creating a graph
 
 There are two arities for `make-graph`, which returns an instance of
 `ont_app.datomic_client.core.DatomicClient`, with members `:conn` and
@@ -103,8 +119,8 @@ Datomic's standard schema declarations:
 >
 ``` 
 
-<a name="h3-member-access"></a>
-### Member access 
+<a name="h2-member-access"></a>
+## Member access 
 
 We can access the Datomic native representation directly:
 
@@ -167,12 +183,13 @@ true
 >
 ```
 
+
 As with all IGraph implementations, a
 [traversal](https://github.com/ont-app/igraph/tree/develop#Traversal)
 function may be [provided as the `p`
 argument](https://github.com/ont-app/igraph/tree/develop#traversal-fn-as-p).
 
-
+<a name="h3-spo-vs-eav"></a>
 ### S-P-O vs E-A-V
 
 Note that while both IGraph and Datomic's native representation are
@@ -207,8 +224,8 @@ can be either refs or literal values, interpreted per the Attribute
 declarations in the Datomic schema. Objects can be specified as KWIs
 (interpreted as Datomic :db.type/refs), as literal values supported by
 Datomic, or if the object is not supported natively by Datomic, they
-may be encoded/decoded as (non-queriable except by regex ??check this)
-EDN strings.
+may be encoded/decoded as (non-queriable except by regex) EDN strings.
+
 
 <a name="h4-minting-kwis"></a>
 #### Minting KWIs
@@ -289,6 +306,27 @@ Or if you want to use multiple-arity queries or Datomic's [pull
 syntax](https://docs.datomic.com/client-api/datomic.client.api.html#var-pull),
 you can access the db with (:db g) and do that directly.
 
+<a name="h3-other-utilities"></a>
+### Other utilities
+
+The `domain-element?` function returns true for refs which are not
+part of the standard schema, and thus presumably part of your domain
+model:
+
+```
+> (filter dg/domain-element? (subjects g))
+(
+ :movie/date
+ :movie/title
+ :movie/certifications
+ :movie/genre
+ :movie/Movie_The_Goonies_1985
+ ...
+ )
+> 
+
+```
+<a name="h2-adding-and-removing-members"></a>
 ## Adding and removing members
 
 Datomic describes its mutability model as "accumulate only". This
@@ -373,6 +411,7 @@ as an illustration, but in practice it would often make more sense to
 declare it as :db.type/tuple with a :db/tupleType as :db.type/long.
 
 
+<a name="h3-removing-with-retract"></a>
 ### Removing with `retract`
 
 The `retract` method implements the [remove-from-graph](https://github.com/ont-app/igraph/tree/develop#remove-from-graph) multimethod, dispatched on igraph/triples-removal-format.
@@ -386,10 +425,19 @@ nil
 >
 ```
 
-
+<a name="h2-testing"></a>
 ## Testing
 
+The `ont-app.datomic-client.core-test` module requires that you have a
+datomic service set up on $DATOMIC_HOST : $DATOMIC_PORT, using a
+database named $DATOMIC_DB_NAME with $DATOMIC_ACCESS_KEY AND
+$DATOMIC_SECRET.
+
 See also the [datomic documentation](https://docs.datomic.com/on-prem/getting-started/connect-to-a-database.html).
+
+It will test to ensure that the pertinent examples in
+[IGraph](https://github.com/ont-app/igraph)'s README work, as well as
+functions specific to _datomic-client_.
 
 ## License
 
