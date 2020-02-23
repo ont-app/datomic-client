@@ -185,11 +185,10 @@ Where
   "Side-effect: declares `p` as an EDN property in `db`"
   [db p]
   {:pre [(keyword? p)
-         (or (debug ::declaring-edn-property
-                          :log/p p)
-             true)
          ]
    }
+  (debug ::declaring-edn-property
+                          :log/p p)
   (swap! edn-properties-cache
          assoc db
          (conj (or (@edn-properties-cache db)
@@ -401,23 +400,58 @@ Where
       (if (not (empty? desc))
         desc))))
 
-(defn get-normal-form 
-  "Returns {<s> {<p> #{<o>, ...}, ...}, ...} for all <s> in `db`
+(def normal-form-timeout
+  "Sets the timeout in ms for normal form query"
+  (atom 1000))
+
+(defn get-normal-form
+  "Returns <desc> for <s> in <db>
 Where
-<e> :igraph/kwi <s>
-<e> is an ID in <db>
-<db> is a datomic DB
+<desc> := {<p> #{<o>, ...}, ...}
 "
   [db]
-  ;; TODO: this is probably not efficient
-  ;; consider using a native igraph as an adapter
-  ;; and reduce-spo over a general query
-  (letfn [(collect-descriptions [m s]
-            (assoc m s (query-for-p-o db s)))
+  (letfn [(collect-desc [desc [p o]]
+            (if (= p :igraph/kwi)
+              desc
+              (let [os (conj (or (desc p) #{})
+                             (maybe-read-edn db p o))
+                    ]
+                (if-not (empty? os)
+                  (assoc desc p (conj os ))
+                  desc))))
+          (collect-entry [macc [s p o]]
+            (let [desc (collect-desc (or (macc s)
+                                         {})
+                                     [p o])
+                  ]
+              (if-not (empty? desc)
+                (assoc macc s desc)
+                macc)))
           ]
-    (reduce collect-descriptions
-            {}
-            (get-subjects db))))
+    (try
+      (let [entries
+          (reduce collect-entry {}
+                  (d/q {:query '[:find ?s ?p ?o
+                                 :in $ %
+                                 :where
+                                 (subject ?e ?s)
+                                 [?e ?_p ?_o]
+                                 [?_p :db/ident ?p]
+                                 (resolve-refs ?e ?_p ?_o ?o)
+                                 ]
+                        :args [db igraph-rules]
+                        :timeout @normal-form-timeout
+                        }))
+            ]
+        entries)
+      (catch Throwable e
+        (throw (ex-info "Normal Form is intractable"
+               (merge (:ex-data e)
+                      {:type ::igraph/Intractable
+                       :normal-form-timeout @normal-form-timeout
+                       :db db
+                       })))))))
+                   
 
 (defn query-for-o 
   "Returns #{<o>, ...} for `s` and `p` in `db`

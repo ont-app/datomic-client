@@ -183,6 +183,10 @@ true
 >
 ```
 
+The atom `normal-form-timeout` sets the timeout when querying for
+normal form, and defaults to 1000 (ms). If the timeout is exceeded it
+will throw _ex-info_ of type `::igraph/Intractable`.
+
 
 As with all IGraph implementations, a
 [traversal](https://github.com/ont-app/igraph/tree/develop#Traversal)
