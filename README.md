@@ -16,7 +16,7 @@ Part of the ont-app library, dedicated to Ontology-driven development.
   - [Querying](#h3-querying)
   - [Other utilities](#h3-other-utilities)
 - [Adding and removing members](#h2-adding-and-removing-members)
-  - [Adding with 'claim'](#h3-adding-with-claim)
+  - [Adding with `claim`](#h3-adding-with-claim)
   - [Removing with `retract`](#h3-removing-with-retract)
 - [Testing](#h2-testing)
 
@@ -321,7 +321,7 @@ for movies based on the title and the year of release:
 >
 ```
 
-<a name="h4-querying"></a>
+<a name="h3-querying"></a>
 #### Querying
 
 The IGraph `query` method can be used for datalog queries with either
@@ -398,6 +398,7 @@ true
 >
 ```
 
+<a name="h3-adding-with-claim></a>
 ### Adding with 'claim'
 As it happens, `add` is already dedicated to the
 [igraph/IGraphImmutable](https://github.com/ont-app/igraph/tree/develop#IGraphImmutable)
