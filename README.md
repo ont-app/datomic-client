@@ -495,7 +495,12 @@ database named $DATOMIC_DB_NAME with $DATOMIC_ACCESS_KEY AND
 $DATOMIC_SECRET, for which see the [datomic
 documentation](https://docs.datomic.com/on-prem/getting-started/connect-to-a-database.html).
 
-It will test to ensure that the pertinent examples in
+
+```
+$ lein test
+```
+
+... will test to ensure that the pertinent examples in
 [IGraph](https://github.com/ont-app/igraph)'s README work, as well as
 functions specific to _datomic-client_.
 
