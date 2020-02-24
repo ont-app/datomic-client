@@ -229,10 +229,10 @@ argument](https://github.com/ont-app/igraph/tree/develop#traversal-fn-as-p) for 
 <a name="h3-spo-vs-eav"></a>
 ### S-P-O vs E-A-V
 
-Note that while both IGraph and Datomic's native representation are
+While both IGraph and Datomic's native representation are
 graph-oriented, the IGraph representation is based on an RDF-inspired
 subject-predicate-object (SPO) model, whereas the Datomic
-representation is based on what could be called an
+representation is based on what is sometimes called an
 entity-attribute-value (EAV) model.
 
 
@@ -290,9 +290,9 @@ objects in your graph. The default behavior is thus:
 distinguish your instance of :myNs/Head in whatever universe you
 expect to be playing in.
 
-The `mint-kwi` multi-method is keyed on the first 'head'
-argument. Here is an example of a defmethod that mints a KWI for
-movies based on the title and the year of release:
+The `mint-kwi` multi-method is dispatched on the value of the first
+'head' argument. Here is an example of a defmethod that mints a KWI
+for movies based on the title and the year of release:
 
 ```
 > (defmethod mint-kwi :movie/Movie
@@ -300,8 +300,7 @@ movies based on the title and the year of release:
   ;; Generates unique KWI for <title> made in <year>
   (let [{title :movie/title
          year :movie/year
-         }
-        args
+         } args
         _ns (namespace head-kwi)
         _name (name head-kwi)
         stringify (fn [x]
