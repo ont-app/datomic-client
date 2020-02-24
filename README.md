@@ -1,6 +1,8 @@
 # ont-app/datomic-client
 
-The project ports the Datomic Client to the IGraph protocols.
+Ports the [Datomic
+Client](https://docs.datomic.com/cloud/client/client-api.html) to the
+[IGraph](https://github.com/ont-app/igraph) protocols.
 
 Part of the ont-app library, dedicated to Ontology-driven development.
 
@@ -56,9 +58,9 @@ See the [Datomic docs on connecting to a
 database](https://docs.datomic.com/on-prem/getting-started/connect-to-a-database.html). This
 will give you instructions for installing and running Datomic.
 
-It is presumed that you have a datomic service set up on
-$DATOMIC_HOST : $DATOMIC_PORT, using a database named $DATOMIC_DB_NAME
-with $DATOMIC_ACCESS_KEY AND $DATOMIC_SECRET.
+For purposes of this discussion, let's assume that you have a datomic
+service set up on $DATOMIC_HOST : $DATOMIC_PORT, using a database
+named $DATOMIC_DB_NAME with $DATOMIC_ACCESS_KEY AND $DATOMIC_SECRET.
 
 Somewhere at the top level of your application you will acquire a
 datomic connection per the Datomic instructions:
@@ -81,10 +83,12 @@ datomic connection per the Datomic instructions:
 <a name="h2-creating-a-graph"></a>
 ## Creating a graph
 
-There are two arities for `make-graph`, which returns an instance of
+Graph instances are created with `make-graph`, with two arities.  This
+function returns an instance of
 `ont_app.datomic_client.core.DatomicClient`, with members `:conn` and
 `:db`:
 
+With just the connection (db will be set as of the most recent transaction):
 ```
 > (def g (make-graph conn))
 {:conn
@@ -92,6 +96,10 @@ There are two arities for `make-graph`, which returns an instance of
  :db
  {:t 1034, :next-t 1040, :db-name "hello", :database-id "5e4608e8-8e48-49e5-a43f-9b73168ca4b8", :as-of 1034, :type :datomic.client/db}}
 >
+```
+
+Or we can provide a `db` argument as of any previous transaction:
+```
 > (def db-on-valentines-day  (d/as-of (d/db conn) #inst "2020-02-14")) 
 > (def g-on-valentines-day (make-graph conn db-on-valentines-day))
 {:conn
@@ -101,8 +109,12 @@ There are two arities for `make-graph`, which returns an instance of
 > 
 ```
 
-The following supporting attributes are automatically added to
-Datomic's standard schema declarations:
+A new database comes with a set of [standard
+schema](https://docs.datomic.com/cloud/schema/schema-reference.html)
+declarations.
+
+The following supporting attributes are automatically added to those
+schema declarations:
 
 ```
 > dg/igraph-schema
@@ -115,7 +127,8 @@ Datomic's standard schema declarations:
       :valueType :db.type/boolean,
       :cardinality :db.cardinality/one,
       :doc
-      "Domain is string-valued property. True if value should be encoded and read as an edn representation of some object."}]
+      "Domain is string-valued property. True if value should be encoded and 
+      read as an edn representation of some object."}]
 >
 ``` 
 
@@ -135,9 +148,11 @@ We can access the Datomic native representation directly:
 
 Each graph implements the [IGraph protocol](https://github.com/ont-app/igraph/tree/develop#The_IGraph_protocol).
 
-New graphs are already populated with the standard Datomic Schema
-declarations. We can access the contents of the graph with the
-standard IGraph accessor functions:
+We can access the contents of the graph with the standard [IGraph
+accessor
+functions](https://github.com/ont-app/igraph/tree/develop#Member_access).
+
+We can get a lazy sequence of all subjects:
 
 ```
 > (subjects g)
@@ -149,7 +164,11 @@ standard IGraph accessor functions:
  ...
  )
  > 
- > (g) ;; returns whole graph in normal form - use sparingly
+ ```
+ Zero args gives us [normal form](https://github.com/ont-app/igraph/tree/develop#Normal_form):
+ 
+ ```
+ > (g) 
 {:db.type/instant
  {:db/doc
   #{"Value type for instants in time. Stored internally as a number of milliseconds since midnight, January 1, 1970 UTC. Representation type will vary depending on the language you are using."},
@@ -164,6 +183,15 @@ standard IGraph accessor functions:
 ... 
 }
 >
+```
+
+The atom `dg/normal-form-timeout` sets the timeout when querying for
+normal form, and defaults to 1000 (ms). If the timeout is exceeded it
+will throw _ex-info_ of type `::igraph/Intractable`.
+
+One arg gives us a description of a subject _s_:
+
+```
 > (g :db/code) ;; returns description of :db/code in normal form
  #:db{:cardinality #{:db.cardinality/one},
      :fulltext #{true},
@@ -172,26 +200,31 @@ standard IGraph accessor functions:
      :ident #{:db/code},
      :valueType #{:db.type/string}}
 >
+```
+
+Two args gives us the set of objects for _s_ and _p_:
+
+```
 > (g :db/code :db/doc) ;; returns set of objects
 #{"String-valued attribute of a data function that contains the function's source code."}
 >
 (unique (g :db/code :db/doc)) ;; because we know :db/doc is cardinality-1
 "String-valued attribute of a data function that contains the function's source code."
 >
+```
+
+Three args is truthy:
+
+```
 (g :db/code :db/cardinality :db.cardinality/one) ;; truthy
 true
 >
 ```
 
-The atom `normal-form-timeout` sets the timeout when querying for
-normal form, and defaults to 1000 (ms). If the timeout is exceeded it
-will throw _ex-info_ of type `::igraph/Intractable`.
-
-
 As with all IGraph implementations, a
 [traversal](https://github.com/ont-app/igraph/tree/develop#Traversal)
 function may be [provided as the `p`
-argument](https://github.com/ont-app/igraph/tree/develop#traversal-fn-as-p).
+argument](https://github.com/ont-app/igraph/tree/develop#traversal-fn-as-p) for 2- and 3- arg invocations.
 
 <a name="h3-spo-vs-eav"></a>
 ### S-P-O vs E-A-V
@@ -199,16 +232,20 @@ argument](https://github.com/ont-app/igraph/tree/develop#traversal-fn-as-p).
 Note that while both IGraph and Datomic's native representation are
 graph-oriented, the IGraph representation is based on an RDF-inspired
 subject-predicate-object (SPO) model, whereas the Datomic
-representation is based on an entity-attribute-value (EAV) model.
+representation is based on what could be called an
+entity-attribute-value (EAV) model.
 
 
-Entities in this case are DB-specific integer identifiers, whereas
-Subjects are assumed to be keyword identifiers (KWIs), used as (and
-mappable to) URIs. Subjects 'pivot' off of Entity numbers via
-attributes which are either :db/ident or :db/unique
-:db.unique/identity. :db/ident provides faster access, but should be
-used relatively sparingly for large models, as they must be held
-always in memory.
+Entities (E) in this case are DB-specific integer identifiers, whereas
+Subjects (S) are assumed to be keyword identifiers (KWIs), used as
+(and [mappable to](https://github.com/ont-app/vocabulary))
+[URI](https://www.wikidata.org/wiki/Q61694)s. Subjects 'pivot' off of
+Entity numbers via attributes which are either
+[:db/ident](https://docs.datomic.com/on-prem/identity.html#idents) or
+:db/unique
+[:db.unique/identity](https://docs.datomic.com/on-prem/identity.html#unique-identities). :db/ident
+provides faster access, but should be used relatively sparingly for
+large models, as they must be held always in memory.
 
 The `entity-id` function returns the `e` for any unique ID in a given DB:
 
@@ -218,36 +255,44 @@ The `entity-id` function returns the `e` for any unique ID in a given DB:
 >
 ```
 
-You may find the discussion below on the method for minting KWIs useful.
+You may find the discussion
+[below](https://github.com/ont-app/datomic-client#minting-kwis) on the
+method for minting KWIs useful.
 
-Properties and Attributes are approximately equivalent. They must be
-declared in the schema as :db/ident.
+Attributes (A) and Properties (P) are approximately equivalent. They
+must be declared in the schema as :db/ident.
 
-Datomic Values and IGraph Objects are approximately equivalent. Values
-can be either refs or literal values, interpreted per the Attribute
-declarations in the Datomic schema. Objects can be specified as KWIs
-(interpreted as Datomic :db.type/refs), as literal values supported by
-Datomic, or if the object is not supported natively by Datomic, they
-may be encoded/decoded as (non-queriable except by regex) EDN strings.
+Datomic Values (V) and IGraph Objects (O) are also approximately
+equivalent. Values can be either refs or literal values, interpreted
+per the Attribute declarations in the Datomic schema. Objects can be
+specified as KWIs (interpreted as Datomic :db.type/refs), as literal
+values supported by Datomic, or if the object is not supported
+natively by Datomic, they may be encoded/decoded as (non-queriable
+except by regex) EDN strings.
 
 
 <a name="h4-minting-kwis"></a>
 #### Minting KWIs
 
-The ont-app.igraph-vocabulary.core module provides a multi-method
-called mint-kwi. This can be useful for creating unique KWIs to serve
-as subjects or objects in your graph. The default behavior is thus:
+The
+[ont-app.igraph-vocabulary.core](https://github.com/ont-app/igraph-vocabulary)
+module provides a multi-method called `mint-kwi`. This can be useful
+for creating unique keyword identifiers to serve as subjects or
+objects in your graph. The default behavior is thus:
 
 ```
 > (mint-kwi :myNs/Head :myNs/p1 "foo" :myNs/p2 "bar")
 :myNs/Head_p1_foo_p2_bar
 >
-```
-... where `p1` and `p2` should be sufficient to uniquely distinguish your instance of :myNs/Head in whatever universe you expect to be playing in.
+``` 
 
-The `mint-kwi` multi-method is keyed on the first argument. Here is an
-example of a defmethod that mints a KWI for movies based on the title
-and the year of release:
+... where `p1` and `p2` should be sufficient to uniquely
+distinguish your instance of :myNs/Head in whatever universe you
+expect to be playing in.
+
+The `mint-kwi` multi-method is keyed on the first 'head'
+argument. Here is an example of a defmethod that mints a KWI for
+movies based on the title and the year of release:
 
 ```
 > (defmethod mint-kwi :movie/Movie
@@ -280,8 +325,10 @@ and the year of release:
 <a name="h4-querying"></a>
 #### Querying
 
-The IGraph `query` method can be used for datalog queries waith either
-a vector for simple queries or a map for datomic's arity-one format:
+The IGraph `query` method can be used for datalog queries with either
+a vector for simple queries or a map for datomic's
+[arity-one](https://docs.datomic.com/client-api/datomic.client.api.html#var-q)
+format:
 
 ```
 > (query g 
@@ -311,7 +358,7 @@ syntax](https://docs.datomic.com/client-api/datomic.client.api.html#var-pull),
 you can access the db with (:db g) and do that directly.
 
 <a name="h3-other-utilities"></a>
-### Other utilities
+### Other utilities (specific to this library)
 
 The `domain-element?` function returns true for refs which are not
 part of the standard schema, and thus presumably part of your domain
@@ -333,11 +380,15 @@ model:
 <a name="h2-adding-and-removing-members"></a>
 ## Adding and removing members
 
-Datomic describes its mutability model as "accumulate only". This
+Datomic describes its mutability model as "[accumulate
+only](https://docs.datomic.com/cloud/whatis/data-model.html#accumulate-only)". This
 means that you can access any earlier state of the DB using the
 `as-of` function. Assertions can be added and removed using the
-functions `add` and `retract`. Assertions which have been retracted at some point in time are still available to earlier states of the DB.
+datomic API functions `add` and `retract`. Assertions which have been
+retracted at some point in time are still available to earlier states
+of the DB.
 
+This library implements an IGraph mutability model dedicated to this:
 
 ```
 > (mutability g)
@@ -350,9 +401,11 @@ true
 
 ### Adding with 'claim'
 As it happens, `add` is already dedicated to the
-igraph/IGraphImmutable protocol, so the IGraphAccumulateOnly protocol
-uses `retract` to remove assertions, and its antonym `claim` to add
-assertions.
+[igraph/IGraphImmutable](https://github.com/ont-app/igraph/tree/develop#IGraphImmutable)
+protocol, so the
+[igraph/IGraphAccumulateOnly](https://github.com/ont-app/igraph/tree/develop#IGraphAccumulateOnly)
+protocol uses `retract` to remove assertions, and its antonym `claim`
+to add assertions.
 
 `claim` implements the
 [igraph/add-to-graph](https://github.com/ont-app/igraph/tree/develop#add-to-graph)
@@ -372,9 +425,9 @@ nil
 >
 ```
 
-Since :fullName is not already in the schema, its schema is
-automatically inferred based on the type of its object, with default
-cardinality of 'many':
+Since in this example :fullName is not already in the schema, its
+schema is automatically inferred based on the type of its object, with
+default cardinality of 'many':
 
 ```
 > (g' :fullName)
@@ -386,7 +439,7 @@ cardinality of 'many':
 ```
 
 Keywords are presumed to be KWIs, and interpreted as
-:db.type/ref. Properties that range over keywords should be declared
+:db.type/ref. Properties that range over keywords need to be declared
 explicitly in the schema.
 
 If an object is provided whose data type is not [supported natively by
@@ -418,7 +471,9 @@ declare it as :db.type/tuple with a :db/tupleType as :db.type/long.
 <a name="h3-removing-with-retract"></a>
 ### Removing with `retract`
 
-The `retract` method implements the [remove-from-graph](https://github.com/ont-app/igraph/tree/develop#remove-from-graph) multimethod, dispatched on igraph/triples-removal-format.
+The `retract` method implements the
+[remove-from-graph](https://github.com/ont-app/igraph/tree/develop#remove-from-graph)
+multimethod, dispatched on igraph/triples-removal-format.
 
 ```
 > (def g' (retract g' [:john]))
@@ -429,15 +484,16 @@ nil
 >
 ```
 
+And we can also call retract with more specific _s p_ or _s p o_ arguments.
+
 <a name="h2-testing"></a>
 ## Testing
 
 The `ont-app.datomic-client.core-test` module requires that you have a
 datomic service set up on $DATOMIC_HOST : $DATOMIC_PORT, using a
 database named $DATOMIC_DB_NAME with $DATOMIC_ACCESS_KEY AND
-$DATOMIC_SECRET.
-
-See also the [datomic documentation](https://docs.datomic.com/on-prem/getting-started/connect-to-a-database.html).
+$DATOMIC_SECRET, for which see the [datomic
+documentation](https://docs.datomic.com/on-prem/getting-started/connect-to-a-database.html).
 
 It will test to ensure that the pertinent examples in
 [IGraph](https://github.com/ont-app/igraph)'s README work, as well as
