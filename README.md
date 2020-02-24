@@ -398,7 +398,7 @@ true
 >
 ```
 
-<a name="h3-adding-with-claim></a>
+<a name="h3-adding-with-claim"></a>
 ### Adding with 'claim'
 As it happens, `add` is already dedicated to the
 [igraph/IGraphImmutable](https://github.com/ont-app/igraph/tree/develop#IGraphImmutable)
