@@ -24,6 +24,13 @@ Part of the ont-app library, dedicated to Ontology-driven development.
 <a name="h2-dependencies"></a>
 ## Dependencies
 
+Available on [Clojars](https://clojars.org/ont-app/datomic-client).
+
+[![Clojars Project](https://img.shields.io/clojars/v/ont-app/datomic-client.svg)](https://clojars.org/ont-app/datomic-client)
+
+Additional documentation available at https://cljdoc.org/d/ont-app/datomic-client/0.1.0 .
+
+
 Follow the [getting started guide for
 Datomic](https://docs.datomic.com/on-prem/get-datomic.html). To get a
 datomic service up and running.
