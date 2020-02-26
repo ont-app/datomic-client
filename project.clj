@@ -1,4 +1,4 @@
-(defproject ont-app/datomic-client "0.1.0"
+(defproject ont-app/datomic-client "0.1.1-SNAPSHOT"
   :description "Extends IGraph protocol to Datomic"
   :url "https://github.com/ont-app/datomic-client"
   :license {:name "Eclipse Public License"
@@ -9,10 +9,10 @@
                  [com.datomic/client-pro "0.9.43"]
                  [environ "1.1.0"]
                  ;; Ont-app libs
-                 [ont-app/graph-log "0.1.0"]
-                 [ont-app/igraph "0.1.4"]
-                 [ont-app/igraph-vocabulary "0.1.0"] 
-                 [ont-app/vocabulary "0.1.0"] 
+                 [ont-app/graph-log "0.1.1-SNAPSHOT"]
+                 [ont-app/igraph "0.1.5-SNAPSHOT"]
+                 [ont-app/igraph-vocabulary "0.1.1-SNAPSHOT"] 
+                 [ont-app/vocabulary "0.1.1-SNAPSHOT"] 
                  ]
   
   ;; :main ^:skip-aot ont-app.datomic-client.core
